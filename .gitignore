@@ -1,15 +1,46 @@
+# Thu vien / ket qua build
 node_modules/
 dist/
 build/
 bin/
 target/
 out/
+.gradle/
 *.class
+
+# Jar (nhung giu Gradle Wrapper)
 *.jar
+!gradle/wrapper/gradle-wrapper.jar
+!backend/gradle/wrapper/gradle-wrapper.jar
 *.zip
+
+# IDE / he dieu hanh
 .vscode/
 .vs/
 .idea/
-*.log
+.figma/
 .DS_Store
 Thumbs.db
+
+# Log
+*.log
+*.err
+logs/
+
+# Du lieu cuc bo va bi mat (KHONG commit)
+.env
+.env.*
+!.env.example
+local-secrets.bat
+*.db
+*.sqlite
+peer-data/
+blob-data/
+captures/
+tls/
+*.p12
+*.pfx
+*.pem
+*.key
+*.jks
+*.keystore
