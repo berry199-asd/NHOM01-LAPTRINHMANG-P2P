@@ -1,0 +1,90 @@
+plugins {
+    id 'java'
+    id 'application'
+}
+
+group = 'com.workchat'
+version = '0.1.0'
+
+repositories {
+    mavenCentral()
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.release = 17
+    options.encoding = 'UTF-8'
+}
+
+application {
+    mainClass = 'com.workchat.tracker.TrackerServer'
+}
+
+dependencies {
+    implementation 'io.netty:netty-all:4.1.118.Final'
+    implementation 'com.fasterxml.jackson.core:jackson-databind:2.18.2'
+    implementation 'com.zaxxer:HikariCP:5.1.0'
+    implementation 'com.mysql:mysql-connector-j:8.4.0'
+    implementation 'at.favre.lib:bcrypt:0.10.2'
+    implementation 'com.sun.mail:jakarta.mail:2.0.1'
+    implementation 'org.xerial:sqlite-jdbc:3.47.1.0'
+    runtimeOnly 'org.slf4j:slf4j-simple:2.0.16'
+
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.11.4'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+test {
+    useJUnitPlatform {
+        excludeTags 'integration'
+    }
+}
+
+// Test tích hợp (Gd3E2eTest, OfflineApiTest): cần Tracker + MySQL đang chạy, token thật.
+// Chạy: gradlew integrationTest -Dgd3.token9=... -Dgd3.token146=...
+tasks.register('integrationTest', Test) {
+    group = 'verification'
+    description = 'Chạy test tích hợp (cần Tracker + MySQL đang chạy; xem javadoc từng test)'
+    useJUnitPlatform {
+        includeTags 'integration'
+    }
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    outputs.upToDateWhen { false }
+    doFirst {
+        System.getProperties().each { k, v ->
+            if (k.toString().startsWith('gd3.') || k.toString().startsWith('offline.')) {
+                systemProperty(k.toString(), v)
+            }
+        }
+    }
+}
+
+tasks.named('run') {
+    standardInput = System.in
+    outputs.upToDateWhen { false }
+}
+
+tasks.register('peerRun', JavaExec) {
+    group = 'application'
+    description = 'Run a chat peer core (data-plane)'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.workchat.peer.cli.PeerCoreCli'
+    standardInput = System.in
+    outputs.upToDateWhen { false }
+    if (project.hasProperty('peerArgs')) {
+        args(project.property('peerArgs').toString().trim().split('\\s+'))
+    }
+}
+
+tasks.register('printRuntimeClasspath') {
+    group = 'application'
+    description = 'Print the runtime classpath for the main source set'
+    doLast {
+        println sourceSets.main.runtimeClasspath.asPath
+    }
+}
