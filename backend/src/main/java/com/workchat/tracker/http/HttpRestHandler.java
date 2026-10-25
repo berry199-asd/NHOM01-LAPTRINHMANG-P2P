@@ -413,8 +413,16 @@ public final class HttpRestHandler extends SimpleChannelInboundHandler<FullHttpR
         times.add(now);
 
         String code = String.format("%06d", RNG.nextInt(1_000_000));
-        otpDao.revokeActive(userEmail, "e2e_reset");
-        otpDao.insert(userEmail, "e2e_reset", OtpDao.sha256Hex(code), 5);
+        try {
+            otpDao.revokeActive(userEmail, "e2e_reset");
+            otpDao.insert(userEmail, "e2e_reset", OtpDao.sha256Hex(code), 5);
+    
+        } catch (SQLException e) {
+            System.err.println("[tracker-otp] Lỗi lưu OTP E2E: " + e.getMessage());
+            write(ctx, HttpResponseStatus.INTERNAL_SERVER_ERROR, Json.write(Map.of("ok", false, "error", "Lỗi cơ sở dữ liệu khi tạo mã OTP. Vui lòng chạy migration 008_e2e_reset_otp_purpose.sql trên MySQL.")));
+            return;
+        }
+
 
         if (mailer != null) {
             try {
@@ -449,7 +457,14 @@ public final class HttpRestHandler extends SimpleChannelInboundHandler<FullHttpR
             return;
         }
 
-        Optional<OtpDao.OtpRow> row = otpDao.findActive(userEmail, "e2e_reset");
+        Optional<OtpDao.OtpRow> row;
+        try {
+            row = otpDao.findActive(userEmail, "e2e_reset");
+        } catch (SQLException e) {
+            System.err.println("[tracker-otp] Lỗi tra cứu OTP E2E: " + e.getMessage());
+            write(ctx, HttpResponseStatus.INTERNAL_SERVER_ERROR, Json.write(Map.of("ok", false, "error", "Lỗi cơ sở dữ liệu khi kiểm tra mã OTP")));
+            return;
+        }
         if (row.isEmpty()) {
             write(ctx, HttpResponseStatus.BAD_REQUEST, Json.write(Map.of("ok", false, "error", "Mã OTP không hợp lệ hoặc đã hết hạn")));
             return;
