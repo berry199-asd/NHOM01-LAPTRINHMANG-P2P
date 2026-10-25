@@ -229,7 +229,7 @@ export function MessageList({
           nextGapOk && !!nextRaw && senderKey(msg) === senderKey(nextRaw)
         const isMidCluster = clustered && nextClustered
         const dayDivider =
-          !msg.like && (i === 0 || dayBreakUp) ? (
+          (i === 0 || dayBreakUp) ? (
             <DayDivider label={dayLabel(curTs)} />
           ) : null
         const quoteTarget = (msg.replyId || msg.replyToClientId)
@@ -283,41 +283,124 @@ export function MessageList({
         }
 
         if (msg.like) {
+          const isMine = !!msg.fromMe
+          const sender = selected.isGroup
+            ? (selected.members ?? []).find((m) => m.id === msg.senderId)
+            : undefined
+          const profile = selected.isGroup ? getUserProfile(msg.senderId) : undefined
+          const memberNick =
+            selected.isGroup && msg.senderId
+              ? selected.nicknames?.[msg.senderId]
+              : undefined
+          const senderDisplayName =
+            memberNick ||
+            msg.senderName ||
+            sender?.name ||
+            profile?.displayName ||
+            "Thành viên"
+          const senderAvatar = sender?.avatar || profile?.avatarUrl
+          const senderInitials =
+            msg.senderInitials ||
+            sender?.initials ||
+            profile?.initials ||
+            initialsOf(senderDisplayName)
+          const hasReactions = !!msg.reactions && msg.reactions.length > 0
+
           return (
-            <div
-              key={msg.id}
-              className="flex justify-end"
-              onMouseEnter={() => setActiveActionsId(msg.id)}
-              onMouseLeave={() =>
-                setActiveActionsId((cur) => (cur === msg.id ? null : cur))
-              }
-              onPointerDown={(e) => {
-                if (e.pointerType !== "mouse") setActiveActionsId(msg.id)
-              }}
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="relative max-w-xs">
-                <MessageActions
-                  msg={msg}
-                  active={activeActionsId === msg.id}
-                  side="left"
-                  onEdit={startEdit}
-                  onRecall={recallEveryone}
-                  onDelete={deleteForMe}
-                  onReact={toggleReaction}
-                  onShare={openShare}
-                  onReply={startReply}
-                />
-                <div
-                  className="flex items-center justify-center"
-                  style={{
-                    color: "var(--chat-theme-color)",
-                  }}
-                >
-                  <span className="text-3xl leading-none">{msg.text}</span>
+            <Fragment key={msg.id}>
+              {dayDivider}
+              <div
+                id={`msg-${msg.id}`}
+                className={`flex ${isMine ? "justify-end" : "justify-start items-start gap-2"}${
+                  clustered ? " -mt-2" : ""
+                }${jumpId === msg.id ? " msg-flash" : ""}`}
+                onMouseEnter={() => setActiveActionsId(msg.id)}
+                onMouseLeave={() =>
+                  setActiveActionsId((cur) => (cur === msg.id ? null : cur))
+                }
+                onPointerDown={(e) => {
+                  if (e.pointerType !== "mouse") setActiveActionsId(msg.id)
+                }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                {!isMine && selected.isGroup && (
+                  clustered ? (
+                    <div className="w-7 flex-shrink-0" />
+                  ) : (
+                    <div className="flex-shrink-0 mt-2">
+                      <Avatar
+                        sizePx={28}
+                        src={senderAvatar}
+                        name={senderDisplayName}
+                        initials={senderInitials}
+                        showPresence={false}
+                      />
+                    </div>
+                  )
+                )}
+                <div className="relative max-w-xs">
+                  <MessageActions
+                    msg={msg}
+                    active={activeActionsId === msg.id}
+                    side={isMine ? "left" : "right"}
+                    onEdit={startEdit}
+                    onRecall={recallEveryone}
+                    onDelete={deleteForMe}
+                    onReact={toggleReaction}
+                    onShare={openShare}
+                    onReply={startReply}
+                  />
+                  {!isMine && selected.isGroup && !clustered && (
+                    <p
+                      className="text-xs font-medium mb-1 px-1"
+                      style={{ color: "var(--muted)" }}
+                    >
+                      {senderDisplayName}
+                    </p>
+                  )}
+                  <div
+                    className={`flex items-center ${isMine ? "justify-end" : "justify-start"}`}
+                    style={{
+                      color: "var(--chat-theme-color)",
+                      marginBottom: hasReactions ? "12px" : "0px",
+                      transition: "margin-bottom 0.16s ease",
+                    }}
+                  >
+                    <span className="text-3xl leading-none select-none hover:scale-110 transition-transform">
+                      {msg.text}
+                    </span>
+                  </div>
+                  {msg.reactions && msg.reactions.length > 0 && (
+                    <ReactionBadge
+                      reactions={msg.reactions}
+                      side={isMine ? "mine" : "other"}
+                      onOpen={() => {
+                        setReactionMsgId(msg.id)
+                        setReactionTab(null)
+                      }}
+                    />
+                  )}
+                  <p
+                    className={`text-xs mt-1 px-1 flex items-center gap-1 ${
+                      isMine ? "justify-end" : "justify-start"
+                    }`}
+                    style={{ color: "var(--muted)" }}
+                  >
+                    {msg.time}
+                    {isMine && (
+                      <MsgAck
+                        ack={readAck(msg, selected)}
+                        conv={selected}
+                        onOpenSeen={() => setSeenModalMsg(msg)}
+                        onRetry={() =>
+                          retryOutgoing(selected.realId ?? 0, msg.clientId)
+                        }
+                      />
+                    )}
+                  </p>
                 </div>
               </div>
-            </div>
+            </Fragment>
           )
         }
 
