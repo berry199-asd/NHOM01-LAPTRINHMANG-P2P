@@ -1,0 +1,257 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+@import 'tailwindcss';
+
+@theme {
+  --font-sans: 'Inter', system-ui, sans-serif;
+}
+
+:root {
+  --bg: #ffffff;
+  --text: #1a1a1a;
+  --border: #e5e5e5;
+  --primary: #1a1a1a;
+  --primary-fg: #ffffff;
+  --error: #d64545;
+  --muted: #6b6b6b;
+  --surface: #fafafa;
+}
+
+.dark {
+  --bg: #1a1a1a;
+  --text: #ffffff;
+  --border: #333333;
+  --primary: #ffffff;
+  --primary-fg: #000000;
+  --error: #e27878;
+  --muted: #a0a0a0;
+  --surface: #242424;
+}
+
+@keyframes panel-slide-in {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+.theme-icon::before {
+  content: var(--chat-theme-icon, "👍");
+  font-size: inherit;
+  line-height: inherit;
+}
+
+.animate-panel {
+  animation: panel-slide-in 0.22s ease;
+}
+
+.animate-panel-always {
+  animation: panel-slide-in 0.22s ease;
+}
+
+@media (min-width: 768px) {
+  .animate-panel {
+    animation: none;
+  }
+}
+
+body {
+  background-color: var(--bg);
+  color: var(--text);
+  font-family: 'Inter', system-ui, sans-serif;
+  transition: background-color 0.15s ease, color 0.15s ease;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+  transition: scrollbar-color 0.2s;
+}
+
+*:hover {
+  scrollbar-color: rgba(128, 128, 128, 0.25) transparent;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.msg-flash {
+  border-radius: 10px;
+  animation: msg-flash 1s ease 1;
+}
+
+@keyframes msg-flash {
+  0%,
+  100% {
+    background-color: transparent;
+  }
+  25% {
+    background-color: rgba(59, 130, 246, 0.22);
+  }
+}
+
+@keyframes callpulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.45);
+  }
+  50% {
+    box-shadow: 0 0 0 16px rgba(59, 130, 246, 0);
+  }
+}
+
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus {
+  -webkit-box-shadow: 0 0 0px 1000px var(--surface) inset;
+  -webkit-text-fill-color: var(--text);
+  transition: background-color 5000s ease-in-out 0s;
+}
+
+.live-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background-color: #16a34a;
+  animation: live-pulse 1.4s infinite;
+}
+
+@keyframes live-pulse {
+  0% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 rgba(22, 163, 74, 0.5);
+  }
+  70% {
+    opacity: 0.9;
+    box-shadow: 0 0 0 6px rgba(22, 163, 74, 0);
+  }
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 rgba(22, 163, 74, 0);
+  }
+}
+
+.typing-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 9999px;
+  background-color: var(--muted);
+  animation: typing-bounce 1.2s infinite;
+}
+
+.typing-dot:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.typing-dot:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes typing-bounce {
+  0%,
+  60%,
+  100% {
+    opacity: 0.3;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+
+/* ========================================================================== */
+/* Màn hình cuộc gọi (CallOverlay)                                            */
+/* Nền tối có chủ đích cho cả hai theme; biến thể sáng chỉ giảm độ đục để     */
+/* ảnh đại diện mờ phía sau hiện rõ hơn. Chữ luôn sáng vì nền vẫn đủ tối.    */
+/* ========================================================================== */
+
+:root {
+  --call-veil: rgba(10, 14, 26, 0.66);
+  --call-veil-strong: rgba(7, 10, 20, 0.86);
+  --call-fg: #f6f8ff;
+  --call-sub: rgba(238, 242, 255, 0.68);
+  --call-glass: rgba(255, 255, 255, 0.12);
+  --call-glass-strong: rgba(255, 255, 255, 0.2);
+  --call-glass-border: rgba(255, 255, 255, 0.22);
+  --call-ring: rgba(255, 255, 255, 0.55);
+  --call-accent: #7dd3fc;
+  --call-good: #22c55e;
+  --call-weak: #f59e0b;
+  --call-down: #ef4444;
+}
+
+.dark {
+  --call-veil: rgba(6, 9, 17, 0.78);
+  --call-veil-strong: rgba(4, 6, 12, 0.92);
+}
+
+.call-glass {
+  background-color: var(--call-glass);
+  border: 1px solid var(--call-glass-border);
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  backdrop-filter: blur(16px) saturate(140%);
+}
+
+/* Vòng sóng lan tỏa khi đang đổ chuông. */
+.call-wave {
+  animation: call-wave 2.4s ease-out infinite;
+}
+
+.call-wave-delay-1 {
+  animation-delay: 0.8s;
+}
+
+.call-wave-delay-2 {
+  animation-delay: 1.6s;
+}
+
+@keyframes call-wave {
+  0% {
+    transform: scale(0.85);
+    opacity: 0.55;
+  }
+  100% {
+    transform: scale(1.6);
+    opacity: 0;
+  }
+}
+
+/* Vòng phát sáng theo âm lượng khi đang nói (độ mạnh đặt bằng box-shadow inline). */
+.call-glow {
+  transition: box-shadow 120ms linear;
+}
+
+/* Nhịp thở nhẹ cho ảnh ở chế độ thu nhỏ. */
+.call-mini-pulse {
+  animation: call-mini-pulse 2s ease-in-out infinite;
+}
+
+@keyframes call-mini-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(125, 211, 252, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(125, 211, 252, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .call-wave,
+  .call-mini-pulse {
+    animation: none !important;
+  }
+  .call-glow {
+    transition: none !important;
+  }
+}
