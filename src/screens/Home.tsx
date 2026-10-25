@@ -1541,6 +1541,7 @@ export function Home({ darkMode, onToggleDark, onLogout, inviteTarget, onInviteC
               setEmojiTab={setEmojiTab}
               recentEmojis={recentEmojis}
               insertEmojiAtCursor={insertEmojiAtCursor}
+              myMemberId={meId}
             />
           </div>
 

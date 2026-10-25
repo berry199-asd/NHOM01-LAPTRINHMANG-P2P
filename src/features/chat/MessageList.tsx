@@ -49,6 +49,47 @@ export function senderKey(m: Message) {
   return m.fromMe ? "__me__" : (m.senderName ?? "?")
 }
 
+export function AdminRoleBadge({
+  isGroup,
+  highlight,
+  role,
+}: {
+  isGroup?: boolean
+  highlight?: boolean
+  role?: string
+}) {
+  if (!isGroup || highlight === false) return null
+  if (role === "owner") {
+    return (
+      <span
+        className="px-1.5 py-0.2 rounded text-[10px] font-semibold"
+        style={{
+          backgroundColor: "var(--surface)",
+          color: "var(--primary)",
+          border: "1px solid var(--border)",
+        }}
+      >
+        Trưởng nhóm
+      </span>
+    )
+  }
+  if (role === "admin") {
+    return (
+      <span
+        className="px-1.5 py-0.2 rounded text-[10px] font-semibold"
+        style={{
+          backgroundColor: "var(--surface)",
+          color: "var(--muted)",
+          border: "1px solid var(--border)",
+        }}
+      >
+        Phó nhóm
+      </span>
+    )
+  }
+  return null
+}
+
 export function DayDivider({ label }: { label: string }) {
   return (
     <div className="flex justify-center">
@@ -282,6 +323,29 @@ export function MessageList({
           )
         }
 
+        if (msg.kind === "system") {
+          return (
+            <Fragment key={msg.id}>
+              {dayDivider}
+              <div
+                className="flex justify-center items-center my-2.5 px-4"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <span
+                  className="text-xs px-3.5 py-1 rounded-full text-center max-w-[85%] break-words leading-relaxed select-text shadow-sm"
+                  style={{
+                    backgroundColor: "var(--surface)",
+                    color: "var(--muted)",
+                    border: "1px solid var(--border)",
+                  }}
+                >
+                  {msg.text}
+                </span>
+              </div>
+            </Fragment>
+          )
+        }
+
         if (msg.like) {
           const isMine = !!msg.fromMe
           const sender = selected.isGroup
@@ -352,10 +416,21 @@ export function MessageList({
                   />
                   {!isMine && selected.isGroup && !clustered && (
                     <p
-                      className="text-xs font-medium mb-1 px-1"
+                      className="text-xs font-medium mb-1 px-1 flex items-center gap-1.5"
                       style={{ color: "var(--muted)" }}
                     >
-                      {senderDisplayName}
+                      <span>{senderDisplayName}</span>
+                      <AdminRoleBadge
+                        isGroup={selected.isGroup}
+                        highlight={
+                          selected.settings?.highlight_admin_messages !== false
+                        }
+                        role={
+                          sender?.role ??
+                          selected.members?.find((m) => m.id === msg.senderId)
+                            ?.role
+                        }
+                      />
                     </p>
                   )}
                   <div
@@ -651,10 +726,21 @@ export function MessageList({
                     onReply={startReply}
                   />
                   <p
-                    className="text-xs font-medium mb-1 px-1"
+                    className="text-xs font-medium mb-1 px-1 flex items-center gap-1.5"
                     style={{ color: "var(--muted)" }}
                   >
-                    {senderDisplayName}
+                    <span>{senderDisplayName}</span>
+                    <AdminRoleBadge
+                      isGroup={selected.isGroup}
+                      highlight={
+                        selected.settings?.highlight_admin_messages !== false
+                      }
+                      role={
+                        sender?.role ??
+                        selected.members?.find((m) => m.id === msg.senderId)
+                          ?.role
+                      }
+                    />
                   </p>
                   <div
                     className="px-4 py-2 rounded-2xl text-sm italic"
@@ -718,10 +804,21 @@ export function MessageList({
                 <div className="max-w-xs">
                   {!clustered && (
                     <p
-                      className="text-xs font-medium mb-1 px-1"
+                      className="text-xs font-medium mb-1 px-1 flex items-center gap-1.5"
                       style={{ color: "var(--muted)" }}
                     >
-                      {senderDisplayName}
+                      <span>{senderDisplayName}</span>
+                      <AdminRoleBadge
+                        isGroup={selected.isGroup}
+                        highlight={
+                          selected.settings?.highlight_admin_messages !== false
+                        }
+                        role={
+                          sender?.role ??
+                          selected.members?.find((m) => m.id === msg.senderId)
+                            ?.role
+                        }
+                      />
                     </p>
                   )}
                   {msg.forwarded && (

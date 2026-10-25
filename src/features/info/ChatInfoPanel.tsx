@@ -6,6 +6,11 @@ import { type Conversation, formatBytes } from "../../types/chat"
 import { presenceText } from "../../lib/presenceLabel"
 import { THEME_COLORS, themeIcon, EMOJI_CHOICE } from "../chat/emojiData"
 import { downloadFile } from "../chat/bubbles/FileBubble"
+import { GroupSettingsView } from "./GroupSettingsView"
+import { GroupMembersView } from "./GroupMembersView"
+import { GroupJoinRequestsView } from "./GroupJoinRequestsView"
+import { GroupRolesView } from "./GroupRolesView"
+import { GroupBlocksView } from "./GroupBlocksView"
 
 const urlPattern = /https?:\/\/[^\s]+/g
 
@@ -94,6 +99,9 @@ export function InfoPanel({
   const [avatarInput, setAvatarInput] = useState<HTMLInputElement | null>(null)
   const [bgInput, setBgInput] = useState<HTMLInputElement | null>(null)
   const [bgMenuOpen, setBgMenuOpen] = useState(false)
+  const [subView, setSubView] = useState<
+    "none" | "group_settings" | "members" | "join_requests" | "roles" | "blocks"
+  >("none")
 
   const isGroup = !!conv.isGroup
   const isSelfAdmin = admins.includes(myMemberId as number)
@@ -261,6 +269,108 @@ export function InfoPanel({
     </button>
   )
 
+  if (subView === "group_settings") {
+    return (
+      <div
+        className="min-w-[320px] w-[360px] md:w-[360px] max-xl:w-[320px] max-xl:min-w-[300px] max-md:w-full max-md:fixed max-md:inset-0 max-md:z-50 flex-shrink-0 flex flex-col overflow-hidden animate-panel"
+        style={{
+          borderLeft: "1px solid var(--border)",
+          backgroundColor: "var(--bg)",
+        }}
+      >
+        <GroupSettingsView
+          conv={conv}
+          myMemberId={myMemberId}
+          onBack={() => setSubView("none")}
+          onNavigate={(v) => setSubView(v)}
+          onPushToast={onPushToast}
+          onPatch={onPatch}
+          onLeaveRoom={onLeaveRoom}
+        />
+      </div>
+    )
+  }
+
+  if (subView === "members") {
+    return (
+      <div
+        className="min-w-[320px] w-[360px] md:w-[360px] max-xl:w-[320px] max-xl:min-w-[300px] max-md:w-full max-md:fixed max-md:inset-0 max-md:z-50 flex-shrink-0 flex flex-col overflow-hidden animate-panel"
+        style={{
+          borderLeft: "1px solid var(--border)",
+          backgroundColor: "var(--bg)",
+        }}
+      >
+        <GroupMembersView
+          conv={conv}
+          myMemberId={myMemberId}
+          friendCandidates={friendCandidates}
+          onBack={() => setSubView("none")}
+          onPushToast={onPushToast}
+          onRefreshRoom={() => onPatch({})}
+          onViewMember={onViewMember}
+          onAddMembers={onAddMembers}
+        />
+      </div>
+    )
+  }
+
+  if (subView === "join_requests" && conv.realId) {
+    return (
+      <div
+        className="min-w-[320px] w-[360px] md:w-[360px] max-xl:w-[320px] max-xl:min-w-[300px] max-md:w-full max-md:fixed max-md:inset-0 max-md:z-50 flex-shrink-0 flex flex-col overflow-hidden animate-panel"
+        style={{
+          borderLeft: "1px solid var(--border)",
+          backgroundColor: "var(--bg)",
+        }}
+      >
+        <GroupJoinRequestsView
+          roomId={conv.realId}
+          onBack={() => setSubView("group_settings")}
+          onPushToast={onPushToast}
+          onRefreshRoom={() => onPatch({})}
+        />
+      </div>
+    )
+  }
+
+  if (subView === "roles") {
+    return (
+      <div
+        className="min-w-[320px] w-[360px] md:w-[360px] max-xl:w-[320px] max-xl:min-w-[300px] max-md:w-full max-md:fixed max-md:inset-0 max-md:z-50 flex-shrink-0 flex flex-col overflow-hidden animate-panel"
+        style={{
+          borderLeft: "1px solid var(--border)",
+          backgroundColor: "var(--bg)",
+        }}
+      >
+        <GroupRolesView
+          conv={conv}
+          myMemberId={myMemberId}
+          onBack={() => setSubView("group_settings")}
+          onPushToast={onPushToast}
+          onRefreshRoom={() => onPatch({})}
+        />
+      </div>
+    )
+  }
+
+  if (subView === "blocks" && conv.realId) {
+    return (
+      <div
+        className="min-w-[320px] w-[360px] md:w-[360px] max-xl:w-[320px] max-xl:min-w-[300px] max-md:w-full max-md:fixed max-md:inset-0 max-md:z-50 flex-shrink-0 flex flex-col overflow-hidden animate-panel"
+        style={{
+          borderLeft: "1px solid var(--border)",
+          backgroundColor: "var(--bg)",
+        }}
+      >
+        <GroupBlocksView
+          roomId={conv.realId}
+          onBack={() => setSubView("group_settings")}
+          onPushToast={onPushToast}
+        />
+      </div>
+    )
+  }
+
   return (
     <>
       <div
@@ -337,6 +447,76 @@ export function InfoPanel({
                 ? `${conv.members?.length ?? 0} thành viên`
                 : presenceText(conv.online)}
             </p>
+            {isGroup && (
+              <div className="w-full flex items-center justify-center gap-2 pt-1">
+                <button
+                  onClick={() => setSubView("members")}
+                  className="flex-1 flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-lg text-xs font-medium transition-opacity hover:opacity-85"
+                  style={{
+                    backgroundColor: "var(--surface)",
+                    border: "1px solid var(--border)",
+                    color: "var(--text)",
+                  }}
+                  title="Danh sách và phân quyền thành viên"
+                >
+                  <svg
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    style={{ color: "var(--primary)" }}
+                  >
+                    <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2" />
+                    <circle cx="9" cy="7" r="4" />
+                    <path d="M23 21v-2a4 4 0 00-3-3.87" />
+                    <path d="M16 3.13a4 4 0 010 7.75" />
+                  </svg>
+                  <span>Thành viên</span>
+                </button>
+                <button
+                  onClick={() => setSubView("group_settings")}
+                  className="relative flex-1 flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-lg text-xs font-medium transition-opacity hover:opacity-85"
+                  style={{
+                    backgroundColor: "var(--surface)",
+                    border: "1px solid var(--border)",
+                    color: "var(--text)",
+                  }}
+                  title="Cài đặt quản lý nhóm"
+                >
+                  <svg
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    style={{ color: "var(--primary)" }}
+                  >
+                    <circle cx="12" cy="12" r="3" />
+                    <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z" />
+                  </svg>
+                  <span>Quản lý nhóm</span>
+                  {!!conv.pending_join_requests_count &&
+                    conv.pending_join_requests_count > 0 && (
+                      <span
+                        className="px-1.5 py-0.2 rounded-full text-[10px] font-bold"
+                        style={{
+                          backgroundColor: "var(--primary)",
+                          color: "var(--primary-fg)",
+                        }}
+                      >
+                        {conv.pending_join_requests_count}
+                      </span>
+                    )}
+                </button>
+              </div>
+            )}
           </div>
 
           {/* 1. Tùy chỉnh đoạn chat */}

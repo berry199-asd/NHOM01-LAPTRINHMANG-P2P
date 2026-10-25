@@ -238,7 +238,9 @@ export function useRoomManagement({
       bg: finalBg,
       pinned: isPinned,
       muted: isMuted,
-      approval: savedApproval,
+      approval: room.settings ? room.settings.require_join_approval : savedApproval,
+      settings: room.settings,
+      pending_join_requests_count: room.pending_join_requests_count,
       nicknames: savedNicks,
     }
   }
