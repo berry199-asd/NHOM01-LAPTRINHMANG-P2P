@@ -8,11 +8,13 @@ import java.sql.SQLException;
 import java.sql.SQLIntegrityConstraintViolationException;
 import java.sql.Statement;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 
 public final class RoomDao {
     private final DataSource ds;
@@ -23,6 +25,168 @@ public final class RoomDao {
              Statement st = c.createStatement()) {
             st.executeUpdate("ALTER TABLE rooms MODIFY background_url MEDIUMTEXT");
         } catch (Exception ignored) {}
+        initGroupTables();
+    }
+
+    private void initGroupTables() {
+        try (Connection c = ds.getConnection();
+             Statement st = c.createStatement()) {
+            try {
+                st.executeUpdate("ALTER TABLE room_members MODIFY COLUMN room_role ENUM('member','admin','owner','leader') NOT NULL DEFAULT 'member'");
+            } catch (Exception ignored) {}
+            try {
+                st.executeUpdate("CREATE TABLE IF NOT EXISTS room_settings (" +
+                        "room_id BIGINT UNSIGNED NOT NULL, " +
+                        "allow_member_edit_info BOOLEAN NOT NULL DEFAULT TRUE, " +
+                        "allow_member_pin BOOLEAN NOT NULL DEFAULT TRUE, " +
+                        "allow_member_notes_reminders BOOLEAN NOT NULL DEFAULT TRUE, " +
+                        "allow_member_polls BOOLEAN NOT NULL DEFAULT TRUE, " +
+                        "allow_member_send BOOLEAN NOT NULL DEFAULT TRUE, " +
+                        "require_join_approval BOOLEAN NOT NULL DEFAULT FALSE, " +
+                        "highlight_admin_messages BOOLEAN NOT NULL DEFAULT TRUE, " +
+                        "new_member_read_recent BOOLEAN NOT NULL DEFAULT TRUE, " +
+                        "join_link_enabled BOOLEAN NOT NULL DEFAULT FALSE, " +
+                        "join_token VARCHAR(64) NULL, " +
+                        "updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, " +
+                        "PRIMARY KEY (room_id)" +
+                        ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+            } catch (Exception ignored) {}
+            try {
+                st.executeUpdate("CREATE TABLE IF NOT EXISTS join_requests (" +
+                        "id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT, " +
+                        "room_id BIGINT UNSIGNED NOT NULL, " +
+                        "user_id BIGINT UNSIGNED NOT NULL, " +
+                        "invited_by BIGINT UNSIGNED NULL, " +
+                        "via ENUM('invite','link') NOT NULL DEFAULT 'invite', " +
+                        "status ENUM('pending','approved','rejected') NOT NULL DEFAULT 'pending', " +
+                        "created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, " +
+                        "decided_by BIGINT UNSIGNED NULL, " +
+                        "decided_at DATETIME NULL, " +
+                        "PRIMARY KEY (id), " +
+                        "KEY idx_jr_room_status (room_id, status)" +
+                        ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+            } catch (Exception ignored) {}
+            try {
+                st.executeUpdate("CREATE TABLE IF NOT EXISTS room_blocks (" +
+                        "id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT, " +
+                        "room_id BIGINT UNSIGNED NOT NULL, " +
+                        "user_id BIGINT UNSIGNED NOT NULL, " +
+                        "blocked_by BIGINT UNSIGNED NOT NULL, " +
+                        "reason VARCHAR(255) NULL, " +
+                        "blocked_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, " +
+                        "PRIMARY KEY (id), " +
+                        "UNIQUE KEY uq_rb_room_user (room_id, user_id)" +
+                        ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+            } catch (Exception ignored) {}
+        } catch (Exception ignored) {}
+    }
+
+    public record RoomSettings(
+            long roomId,
+            boolean allowMemberEditInfo,
+            boolean allowMemberPin,
+            boolean allowMemberNotesReminders,
+            boolean allowMemberPolls,
+            boolean allowMemberSend,
+            boolean requireJoinApproval,
+            boolean highlightAdminMessages,
+            boolean newMemberReadRecent,
+            boolean joinLinkEnabled,
+            String joinToken
+    ) {
+        public static RoomSettings defaults(long roomId) {
+            return new RoomSettings(
+                    roomId,
+                    true,  // allowMemberEditInfo
+                    true,  // allowMemberPin
+                    true,  // allowMemberNotesReminders
+                    true,  // allowMemberPolls
+                    true,  // allowMemberSend
+                    false, // requireJoinApproval
+                    true,  // highlightAdminMessages
+                    true,  // newMemberReadRecent
+                    false, // joinLinkEnabled
+                    null
+            );
+        }
+
+        public Map<String, Object> toMap() {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("room_id", roomId);
+            m.put("allow_member_edit_info", allowMemberEditInfo);
+            m.put("allow_member_pin", allowMemberPin);
+            m.put("allow_member_notes_reminders", allowMemberNotesReminders);
+            m.put("allow_member_polls", allowMemberPolls);
+            m.put("allow_member_send", allowMemberSend);
+            m.put("require_join_approval", requireJoinApproval);
+            m.put("highlight_admin_messages", highlightAdminMessages);
+            m.put("new_member_read_recent", newMemberReadRecent);
+            m.put("join_link_enabled", joinLinkEnabled);
+            m.put("join_token", joinToken == null ? "" : joinToken);
+            return m;
+        }
+    }
+
+    public record JoinRequestRow(
+            long id,
+            long roomId,
+            long userId,
+            String username,
+            String displayName,
+            String avatarUrl,
+            Long invitedBy,
+            String inviterName,
+            String via,
+            String status,
+            long createdAtMs,
+            Long decidedBy,
+            Long decidedAtMs
+    ) {
+        public Map<String, Object> toMap() {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("id", id);
+            m.put("room_id", roomId);
+            m.put("user_id", userId);
+            m.put("username", username);
+            m.put("display_name", displayName != null && !displayName.isBlank() ? displayName : username);
+            m.put("avatar", avatarUrl == null ? "" : avatarUrl);
+            m.put("invited_by", invitedBy);
+            m.put("inviter_name", inviterName == null ? "" : inviterName);
+            m.put("via", via);
+            m.put("status", status);
+            m.put("created_at", createdAtMs);
+            m.put("decided_by", decidedBy);
+            m.put("decided_at", decidedAtMs);
+            return m;
+        }
+    }
+
+    public record BlockRow(
+            long id,
+            long roomId,
+            long userId,
+            String username,
+            String displayName,
+            String avatarUrl,
+            long blockedBy,
+            String blockerName,
+            String reason,
+            long blockedAtMs
+    ) {
+        public Map<String, Object> toMap() {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("id", id);
+            m.put("room_id", roomId);
+            m.put("user_id", userId);
+            m.put("username", username);
+            m.put("display_name", displayName != null && !displayName.isBlank() ? displayName : username);
+            m.put("avatar", avatarUrl == null ? "" : avatarUrl);
+            m.put("blocked_by", blockedBy);
+            m.put("blocker_name", blockerName == null ? "" : blockerName);
+            m.put("reason", reason == null ? "" : reason);
+            m.put("blocked_at", blockedAtMs);
+            return m;
+        }
     }
 
     public record RoomRow(
@@ -206,10 +370,15 @@ public final class RoomDao {
                         roomId = k.getLong(1);
                     }
                 }
-                addMemberTx(c, roomId, createdBy, "leader");
+                addMemberTx(c, roomId, createdBy, "owner");
                 for (long u : memberIds) {
                     addMemberTx(c, roomId, u, "member");
                 }
+                try (PreparedStatement ps = c.prepareStatement(
+                        "INSERT INTO room_settings (room_id) VALUES (?) ON DUPLICATE KEY UPDATE room_id = room_id")) {
+                    ps.setLong(1, roomId);
+                    ps.executeUpdate();
+                } catch (Exception ignored) {}
                 c.commit();
                 return roomId;
             } catch (SQLException e) {
@@ -221,13 +390,20 @@ public final class RoomDao {
         }
     }
 
-    private static void addMemberTx(Connection c, long roomId, long userId, String role) throws SQLException {
+    public static void addMemberTx(Connection c, long roomId, long userId, String role) throws SQLException {
         try (PreparedStatement p = c.prepareStatement(
-                "INSERT INTO room_members (room_id, user_id, room_role) VALUES (?, ?, ?)")) {
+                "INSERT INTO room_members (room_id, user_id, room_role) VALUES (?, ?, ?) " +
+                        "ON DUPLICATE KEY UPDATE left_at = NULL, banned_at = NULL, room_role = VALUES(room_role)")) {
             p.setLong(1, roomId);
             p.setLong(2, userId);
             p.setString(3, role);
             p.executeUpdate();
+        }
+    }
+
+    public void addOrRestoreMember(long roomId, long userId, String role) throws SQLException {
+        try (Connection c = ds.getConnection()) {
+            addMemberTx(c, roomId, userId, role);
         }
     }
 
@@ -845,16 +1021,455 @@ public final class RoomDao {
     }
 
     private static MemberRow rowMember(ResultSet rs) throws SQLException {
+        String role = rs.getString("room_role");
+        if ("leader".equalsIgnoreCase(role)) {
+            role = "owner";
+        }
         return new MemberRow(
                 rs.getLong("id"),
                 rs.getString("public_id"),
                 rs.getString("username"),
                 rs.getString("display_name"),
                 rs.getString("avatar_url"),
-                rs.getString("room_role"),
+                role,
                 rs.getString("last_read_message_id"),
                 rs.getObject("joined_ms") == null ? null : String.valueOf(rs.getLong("joined_ms")),
                 rs.getLong("last_seen_ms")
         );
+    }
+
+    public RoomSettings getRoomSettings(long roomId) throws SQLException {
+        try (Connection c = ds.getConnection();
+             PreparedStatement p = c.prepareStatement(
+                     "SELECT room_id, allow_member_edit_info, allow_member_pin, allow_member_notes_reminders, " +
+                             "allow_member_polls, allow_member_send, require_join_approval, highlight_admin_messages, " +
+                             "new_member_read_recent, join_link_enabled, join_token FROM room_settings WHERE room_id = ?")) {
+            p.setLong(1, roomId);
+            try (ResultSet rs = p.executeQuery()) {
+                if (rs.next()) {
+                    return new RoomSettings(
+                            rs.getLong("room_id"),
+                            rs.getBoolean("allow_member_edit_info"),
+                            rs.getBoolean("allow_member_pin"),
+                            rs.getBoolean("allow_member_notes_reminders"),
+                            rs.getBoolean("allow_member_polls"),
+                            rs.getBoolean("allow_member_send"),
+                            rs.getBoolean("require_join_approval"),
+                            rs.getBoolean("highlight_admin_messages"),
+                            rs.getBoolean("new_member_read_recent"),
+                            rs.getBoolean("join_link_enabled"),
+                            rs.getString("join_token")
+                    );
+                }
+            }
+        }
+        return RoomSettings.defaults(roomId);
+    }
+
+    public void updateRoomSettings(long roomId, Map<String, Object> patch) throws SQLException {
+        RoomSettings cur = getRoomSettings(roomId);
+        boolean allowMemberEditInfo = patch.containsKey("allow_member_edit_info")
+                ? Boolean.parseBoolean(String.valueOf(patch.get("allow_member_edit_info")))
+                : cur.allowMemberEditInfo();
+        boolean allowMemberPin = patch.containsKey("allow_member_pin")
+                ? Boolean.parseBoolean(String.valueOf(patch.get("allow_member_pin")))
+                : cur.allowMemberPin();
+        boolean allowMemberNotesReminders = patch.containsKey("allow_member_notes_reminders")
+                ? Boolean.parseBoolean(String.valueOf(patch.get("allow_member_notes_reminders")))
+                : cur.allowMemberNotesReminders();
+        boolean allowMemberPolls = patch.containsKey("allow_member_polls")
+                ? Boolean.parseBoolean(String.valueOf(patch.get("allow_member_polls")))
+                : cur.allowMemberPolls();
+        boolean allowMemberSend = patch.containsKey("allow_member_send")
+                ? Boolean.parseBoolean(String.valueOf(patch.get("allow_member_send")))
+                : cur.allowMemberSend();
+        boolean requireJoinApproval = patch.containsKey("require_join_approval")
+                ? Boolean.parseBoolean(String.valueOf(patch.get("require_join_approval")))
+                : cur.requireJoinApproval();
+        boolean highlightAdminMessages = patch.containsKey("highlight_admin_messages")
+                ? Boolean.parseBoolean(String.valueOf(patch.get("highlight_admin_messages")))
+                : cur.highlightAdminMessages();
+        boolean newMemberReadRecent = patch.containsKey("new_member_read_recent")
+                ? Boolean.parseBoolean(String.valueOf(patch.get("new_member_read_recent")))
+                : cur.newMemberReadRecent();
+        boolean joinLinkEnabled = patch.containsKey("join_link_enabled")
+                ? Boolean.parseBoolean(String.valueOf(patch.get("join_link_enabled")))
+                : cur.joinLinkEnabled();
+        String joinToken = patch.containsKey("join_token")
+                ? (patch.get("join_token") == null ? null : String.valueOf(patch.get("join_token")))
+                : cur.joinToken();
+        if (joinLinkEnabled && (joinToken == null || joinToken.isBlank())) {
+            joinToken = UUID.randomUUID().toString().replace("-", "");
+        }
+
+        try (Connection c = ds.getConnection();
+             PreparedStatement p = c.prepareStatement(
+                     "INSERT INTO room_settings (room_id, allow_member_edit_info, allow_member_pin, " +
+                             "allow_member_notes_reminders, allow_member_polls, allow_member_send, require_join_approval, " +
+                             "highlight_admin_messages, new_member_read_recent, join_link_enabled, join_token) " +
+                             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
+                             "ON DUPLICATE KEY UPDATE " +
+                             "allow_member_edit_info = VALUES(allow_member_edit_info), " +
+                             "allow_member_pin = VALUES(allow_member_pin), " +
+                             "allow_member_notes_reminders = VALUES(allow_member_notes_reminders), " +
+                             "allow_member_polls = VALUES(allow_member_polls), " +
+                             "allow_member_send = VALUES(allow_member_send), " +
+                             "require_join_approval = VALUES(require_join_approval), " +
+                             "highlight_admin_messages = VALUES(highlight_admin_messages), " +
+                             "new_member_read_recent = VALUES(new_member_read_recent), " +
+                             "join_link_enabled = VALUES(join_link_enabled), " +
+                             "join_token = VALUES(join_token)")) {
+            p.setLong(1, roomId);
+            p.setBoolean(2, allowMemberEditInfo);
+            p.setBoolean(3, allowMemberPin);
+            p.setBoolean(4, allowMemberNotesReminders);
+            p.setBoolean(5, allowMemberPolls);
+            p.setBoolean(6, allowMemberSend);
+            p.setBoolean(7, requireJoinApproval);
+            p.setBoolean(8, highlightAdminMessages);
+            p.setBoolean(9, newMemberReadRecent);
+            p.setBoolean(10, joinLinkEnabled);
+            p.setString(11, joinToken);
+            p.executeUpdate();
+        }
+    }
+
+    public String regenerateJoinToken(long roomId) throws SQLException {
+        String token = UUID.randomUUID().toString().replace("-", "");
+        try (Connection c = ds.getConnection();
+             PreparedStatement p = c.prepareStatement(
+                     "INSERT INTO room_settings (room_id, join_token, join_link_enabled) VALUES (?, ?, 1) " +
+                             "ON DUPLICATE KEY UPDATE join_token = VALUES(join_token), join_link_enabled = 1")) {
+            p.setLong(1, roomId);
+            p.setString(2, token);
+            p.executeUpdate();
+        }
+        return token;
+    }
+
+    public String getMemberRole(long roomId, long userId) throws SQLException {
+        try (Connection c = ds.getConnection();
+             PreparedStatement p = c.prepareStatement(
+                     "SELECT room_role FROM room_members WHERE room_id = ? AND user_id = ? AND left_at IS NULL AND banned_at IS NULL LIMIT 1")) {
+            p.setLong(1, roomId);
+            p.setLong(2, userId);
+            try (ResultSet rs = p.executeQuery()) {
+                if (rs.next()) {
+                    String r = rs.getString("room_role");
+                    if ("leader".equalsIgnoreCase(r)) return "owner";
+                    return r.toLowerCase();
+                }
+            }
+        }
+        return "";
+    }
+
+    public boolean transferOwner(long roomId, long currentOwnerId, long newOwnerId) throws SQLException {
+        try (Connection c = ds.getConnection()) {
+            c.setAutoCommit(false);
+            try {
+                // Verify newOwnerId is active member
+                try (PreparedStatement pCheck = c.prepareStatement(
+                        "SELECT id FROM room_members WHERE room_id = ? AND user_id = ? AND left_at IS NULL")) {
+                    pCheck.setLong(1, roomId);
+                    pCheck.setLong(2, newOwnerId);
+                    try (ResultSet rs = pCheck.executeQuery()) {
+                        if (!rs.next()) {
+                            c.rollback();
+                            return false;
+                        }
+                    }
+                }
+                // Demote old owner to admin
+                try (PreparedStatement p = c.prepareStatement(
+                        "UPDATE room_members SET room_role = 'admin' WHERE room_id = ? AND user_id = ?")) {
+                    p.setLong(1, roomId);
+                    p.setLong(2, currentOwnerId);
+                    p.executeUpdate();
+                }
+                // Promote new owner to owner
+                try (PreparedStatement p = c.prepareStatement(
+                        "UPDATE room_members SET room_role = 'owner' WHERE room_id = ? AND user_id = ?")) {
+                    p.setLong(1, roomId);
+                    p.setLong(2, newOwnerId);
+                    p.executeUpdate();
+                }
+                // Update rooms.created_by
+                try (PreparedStatement p = c.prepareStatement(
+                        "UPDATE rooms SET created_by = ? WHERE id = ?")) {
+                    p.setLong(1, newOwnerId);
+                    p.setLong(2, roomId);
+                    p.executeUpdate();
+                }
+                c.commit();
+                return true;
+            } catch (SQLException e) {
+                c.rollback();
+                throw e;
+            } finally {
+                c.setAutoCommit(true);
+            }
+        }
+    }
+
+    public void dissolveRoom(long roomId) throws SQLException {
+        try (Connection c = ds.getConnection()) {
+            c.setAutoCommit(false);
+            try {
+                try (PreparedStatement p = c.prepareStatement(
+                        "UPDATE room_members SET left_at = CURRENT_TIMESTAMP WHERE room_id = ? AND left_at IS NULL")) {
+                    p.setLong(1, roomId);
+                    p.executeUpdate();
+                }
+                c.commit();
+            } catch (SQLException e) {
+                c.rollback();
+                throw e;
+            } finally {
+                c.setAutoCommit(true);
+            }
+        }
+    }
+
+    public boolean blockMember(long roomId, long userId, long blockerId, String reason) throws SQLException {
+        try (Connection c = ds.getConnection()) {
+            c.setAutoCommit(false);
+            try {
+                try (PreparedStatement p = c.prepareStatement(
+                        "INSERT INTO room_blocks (room_id, user_id, blocked_by, reason, blocked_at) " +
+                                "VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP) " +
+                                "ON DUPLICATE KEY UPDATE blocked_by = VALUES(blocked_by), reason = VALUES(reason), blocked_at = CURRENT_TIMESTAMP")) {
+                    p.setLong(1, roomId);
+                    p.setLong(2, userId);
+                    p.setLong(3, blockerId);
+                    p.setString(4, reason);
+                    p.executeUpdate();
+                }
+                try (PreparedStatement p = c.prepareStatement(
+                        "UPDATE room_members SET left_at = CURRENT_TIMESTAMP, banned_at = CURRENT_TIMESTAMP " +
+                                "WHERE room_id = ? AND user_id = ? AND left_at IS NULL")) {
+                    p.setLong(1, roomId);
+                    p.setLong(2, userId);
+                    p.executeUpdate();
+                }
+                c.commit();
+                return true;
+            } catch (SQLException e) {
+                c.rollback();
+                throw e;
+            } finally {
+                c.setAutoCommit(true);
+            }
+        }
+    }
+
+    public boolean unblockMember(long roomId, long userId) throws SQLException {
+        try (Connection c = ds.getConnection();
+             PreparedStatement p = c.prepareStatement(
+                     "DELETE FROM room_blocks WHERE room_id = ? AND user_id = ?")) {
+            p.setLong(1, roomId);
+            p.setLong(2, userId);
+            return p.executeUpdate() > 0;
+        }
+    }
+
+    public boolean isUserBlocked(long roomId, long userId) throws SQLException {
+        try (Connection c = ds.getConnection();
+             PreparedStatement p = c.prepareStatement(
+                     "SELECT 1 FROM room_blocks WHERE room_id = ? AND user_id = ? LIMIT 1")) {
+            p.setLong(1, roomId);
+            p.setLong(2, userId);
+            try (ResultSet rs = p.executeQuery()) {
+                return rs.next();
+            }
+        }
+    }
+
+    public List<BlockRow> listBlocks(long roomId) throws SQLException {
+        List<BlockRow> list = new ArrayList<>();
+        try (Connection c = ds.getConnection();
+             PreparedStatement p = c.prepareStatement(
+                     "SELECT rb.id, rb.room_id, rb.user_id, u.username, u.display_name, u.avatar_url, " +
+                             "rb.blocked_by, ub.display_name AS blocker_name, rb.reason, " +
+                             "(UNIX_TIMESTAMP(rb.blocked_at) * 1000) AS blocked_ms " +
+                             "FROM room_blocks rb " +
+                             "JOIN users u ON u.id = rb.user_id " +
+                             "JOIN users ub ON ub.id = rb.blocked_by " +
+                             "WHERE rb.room_id = ? ORDER BY rb.blocked_at DESC")) {
+            p.setLong(1, roomId);
+            try (ResultSet rs = p.executeQuery()) {
+                while (rs.next()) {
+                    list.add(new BlockRow(
+                            rs.getLong("id"),
+                            rs.getLong("room_id"),
+                            rs.getLong("user_id"),
+                            rs.getString("username"),
+                            rs.getString("display_name"),
+                            rs.getString("avatar_url"),
+                            rs.getLong("blocked_by"),
+                            rs.getString("blocker_name"),
+                            rs.getString("reason"),
+                            rs.getLong("blocked_ms")
+                    ));
+                }
+            }
+        }
+        return list;
+    }
+
+    public long createJoinRequest(long roomId, long userId, Long invitedBy, String via) throws SQLException {
+        try (Connection c = ds.getConnection()) {
+            try (PreparedStatement p = c.prepareStatement(
+                    "SELECT id FROM join_requests WHERE room_id = ? AND user_id = ? AND status = 'pending' LIMIT 1")) {
+                p.setLong(1, roomId);
+                p.setLong(2, userId);
+                try (ResultSet rs = p.executeQuery()) {
+                    if (rs.next()) {
+                        return rs.getLong(1);
+                    }
+                }
+            }
+            try (PreparedStatement p = c.prepareStatement(
+                    "INSERT INTO join_requests (room_id, user_id, invited_by, via, status, created_at) " +
+                            "VALUES (?, ?, ?, ?, 'pending', CURRENT_TIMESTAMP)",
+                    Statement.RETURN_GENERATED_KEYS)) {
+                p.setLong(1, roomId);
+                p.setLong(2, userId);
+                if (invitedBy == null) {
+                    p.setNull(3, java.sql.Types.BIGINT);
+                } else {
+                    p.setLong(3, invitedBy);
+                }
+                p.setString(4, via == null ? "invite" : via);
+                p.executeUpdate();
+                try (ResultSet k = p.getGeneratedKeys()) {
+                    if (k.next()) {
+                        return k.getLong(1);
+                    }
+                }
+            }
+        }
+        return -1;
+    }
+
+    public List<JoinRequestRow> listPendingJoinRequests(long roomId) throws SQLException {
+        try (Connection c = ds.getConnection();
+             PreparedStatement pExp = c.prepareStatement(
+                     "UPDATE join_requests SET status = 'rejected', decided_at = CURRENT_TIMESTAMP " +
+                             "WHERE room_id = ? AND status = 'pending' AND created_at < DATE_SUB(NOW(), INTERVAL 14 DAY)")) {
+            pExp.setLong(1, roomId);
+            pExp.executeUpdate();
+        } catch (Exception ignored) {}
+
+        List<JoinRequestRow> list = new ArrayList<>();
+        try (Connection c = ds.getConnection();
+             PreparedStatement p = c.prepareStatement(
+                     "SELECT jr.id, jr.room_id, jr.user_id, u.username, u.display_name, u.avatar_url, " +
+                             "jr.invited_by, inv.display_name AS inviter_name, jr.via, jr.status, " +
+                             "(UNIX_TIMESTAMP(jr.created_at) * 1000) AS created_ms, " +
+                             "jr.decided_by, (UNIX_TIMESTAMP(jr.decided_at) * 1000) AS decided_ms " +
+                             "FROM join_requests jr " +
+                             "JOIN users u ON u.id = jr.user_id " +
+                             "LEFT JOIN users inv ON inv.id = jr.invited_by " +
+                             "WHERE jr.room_id = ? AND jr.status = 'pending' " +
+                             "ORDER BY jr.created_at DESC")) {
+            p.setLong(1, roomId);
+            try (ResultSet rs = p.executeQuery()) {
+                while (rs.next()) {
+                    list.add(new JoinRequestRow(
+                            rs.getLong("id"),
+                            rs.getLong("room_id"),
+                            rs.getLong("user_id"),
+                            rs.getString("username"),
+                            rs.getString("display_name"),
+                            rs.getString("avatar_url"),
+                            rs.getObject("invited_by") == null ? null : rs.getLong("invited_by"),
+                            rs.getString("inviter_name"),
+                            rs.getString("via"),
+                            rs.getString("status"),
+                            rs.getLong("created_ms"),
+                            rs.getObject("decided_by") == null ? null : rs.getLong("decided_by"),
+                            rs.getObject("decided_ms") == null ? null : rs.getLong("decided_ms")
+                    ));
+                }
+            }
+        }
+        return list;
+    }
+
+    public Optional<JoinRequestRow> findJoinRequest(long reqId) throws SQLException {
+        try (Connection c = ds.getConnection();
+             PreparedStatement p = c.prepareStatement(
+                     "SELECT jr.id, jr.room_id, jr.user_id, u.username, u.display_name, u.avatar_url, " +
+                             "jr.invited_by, inv.display_name AS inviter_name, jr.via, jr.status, " +
+                             "(UNIX_TIMESTAMP(jr.created_at) * 1000) AS created_ms, " +
+                             "jr.decided_by, (UNIX_TIMESTAMP(jr.decided_at) * 1000) AS decided_ms " +
+                             "FROM join_requests jr " +
+                             "JOIN users u ON u.id = jr.user_id " +
+                             "LEFT JOIN users inv ON inv.id = jr.invited_by " +
+                             "WHERE jr.id = ?")) {
+            p.setLong(1, reqId);
+            try (ResultSet rs = p.executeQuery()) {
+                if (rs.next()) {
+                    return Optional.of(new JoinRequestRow(
+                            rs.getLong("id"),
+                            rs.getLong("room_id"),
+                            rs.getLong("user_id"),
+                            rs.getString("username"),
+                            rs.getString("display_name"),
+                            rs.getString("avatar_url"),
+                            rs.getObject("invited_by") == null ? null : rs.getLong("invited_by"),
+                            rs.getString("inviter_name"),
+                            rs.getString("via"),
+                            rs.getString("status"),
+                            rs.getLong("created_ms"),
+                            rs.getObject("decided_by") == null ? null : rs.getLong("decided_by"),
+                            rs.getObject("decided_ms") == null ? null : rs.getLong("decided_ms")
+                    ));
+                }
+            }
+        }
+        return Optional.empty();
+    }
+
+    public boolean resolveJoinRequest(long reqId, String status, long deciderId) throws SQLException {
+        try (Connection c = ds.getConnection();
+             PreparedStatement p = c.prepareStatement(
+                     "UPDATE join_requests SET status = ?, decided_by = ?, decided_at = CURRENT_TIMESTAMP " +
+                             "WHERE id = ? AND status = 'pending'")) {
+            p.setString(1, status);
+            p.setLong(2, deciderId);
+            p.setLong(3, reqId);
+            return p.executeUpdate() > 0;
+        }
+    }
+
+    public int countPendingJoinRequests(long roomId) throws SQLException {
+        try (Connection c = ds.getConnection();
+             PreparedStatement p = c.prepareStatement(
+                     "SELECT COUNT(*) FROM join_requests WHERE room_id = ? AND status = 'pending'")) {
+            p.setLong(1, roomId);
+            try (ResultSet rs = p.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getInt(1);
+                }
+            }
+        }
+        return 0;
+    }
+
+    public void insertSystemMessage(long roomId, long operatorId, String text) throws SQLException {
+        if (text == null || text.isBlank()) return;
+        String clientMsgId = "sys-" + System.currentTimeMillis() + "-" + UUID.randomUUID().toString().substring(0, 8);
+        try (Connection c = ds.getConnection();
+             PreparedStatement p = c.prepareStatement(
+                     "INSERT INTO message_meta (client_msg_id, room_id, sender_id, type, content, sent_at) " +
+                             "VALUES (?, ?, ?, 'system', ?, CURRENT_TIMESTAMP)")) {
+            p.setString(1, clientMsgId);
+            p.setLong(2, roomId);
+            p.setLong(3, operatorId);
+            p.setString(4, text);
+            p.executeUpdate();
+        } catch (Exception ignored) {}
     }
 }

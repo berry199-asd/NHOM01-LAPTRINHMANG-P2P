@@ -303,8 +303,28 @@ public final class HttpRestHandler extends SimpleChannelInboundHandler<FullHttpR
                     } else {
                         write(ctx, HttpResponseStatus.METHOD_NOT_ALLOWED, err("method_not_allowed"));
                     }
-                } else if (m == HttpMethod.GET && path.startsWith("/api/rooms/")) {
-                    handleRoomDetail(ctx, req, path);
+                } else if ((m == HttpMethod.PATCH || m == HttpMethod.POST) && path.matches("/api/rooms/\\d+/settings")) {
+                    handleRoomSettingsPatch(ctx, req, path);
+                } else if (m == HttpMethod.POST && path.matches("/api/rooms/\\d+/transfer-owner")) {
+                    handleRoomTransferOwner(ctx, req, path);
+                } else if (m == HttpMethod.POST && path.matches("/api/rooms/\\d+/dissolve")) {
+                    handleRoomDissolve(ctx, req, path);
+                } else if (m == HttpMethod.GET && path.matches("/api/rooms/\\d+/blocks")) {
+                    handleRoomBlocksList(ctx, req, path);
+                } else if (m == HttpMethod.POST && path.matches("/api/rooms/\\d+/blocks/\\d+")) {
+                    handleRoomBlockAdd(ctx, req, path);
+                } else if (m == HttpMethod.DELETE && path.matches("/api/rooms/\\d+/blocks/\\d+")) {
+                    handleRoomBlockRemove(ctx, req, path);
+                } else if (m == HttpMethod.GET && path.matches("/api/rooms/\\d+/join-requests")) {
+                    handleJoinRequestsList(ctx, req, path);
+                } else if (m == HttpMethod.POST && path.matches("/api/rooms/\\d+/join-requests/approve-all")) {
+                    handleJoinRequestsApproveAll(ctx, req, path);
+                } else if (m == HttpMethod.POST && path.matches("/api/rooms/\\d+/join-requests/\\d+/(approve|reject)")) {
+                    handleJoinRequestDecision(ctx, req, path);
+                } else if (m == HttpMethod.POST && path.matches("/api/rooms/\\d+/members/\\d+/role")) {
+                    handleRoomMemberRolePath(ctx, req, path);
+                } else if (m == HttpMethod.DELETE && path.matches("/api/rooms/\\d+/members/\\d+")) {
+                    handleRoomMemberDelete(ctx, req, path);
                 } else if (m == HttpMethod.POST && path.matches("/api/rooms/\\d+/member/add")) {
                     handleRoomMemberAdd(ctx, req, path);
                 } else if (m == HttpMethod.POST && path.matches("/api/rooms/\\d+/member/role")) {
@@ -315,6 +335,8 @@ public final class HttpRestHandler extends SimpleChannelInboundHandler<FullHttpR
                     handleRoomLeave(ctx, req, path);
                 } else if ((m == HttpMethod.PATCH || m == HttpMethod.POST) && path.matches("/api/rooms/\\d+")) {
                     handleRoomUpdate(ctx, req, path);
+                } else if (m == HttpMethod.GET && path.startsWith("/api/rooms/")) {
+                    handleRoomDetail(ctx, req, path);
                 } else if (m == HttpMethod.POST && path.matches("/api/admin/users/\\d+/(lock|unlock)")) {
                     handleAdminLock(ctx, req, path);
                 } else if (m == HttpMethod.POST && path.matches("/api/admin/users/\\d+/role")) {
@@ -1668,11 +1690,26 @@ public final class HttpRestHandler extends SimpleChannelInboundHandler<FullHttpR
             write(ctx, HttpResponseStatus.BAD_REQUEST, err("invalid_user"));
             return;
         }
+        if (roomDao.isUserBlocked(roomId, userId)) {
+            write(ctx, HttpResponseStatus.FORBIDDEN, err("forbidden_member_blocked"));
+            return;
+        }
+        RoomDao.RoomSettings settings = roomDao.getRoomSettings(roomId);
+        String myRole = roomDao.getMemberRole(roomId, me.id());
+        if (settings.requireJoinApproval() && "member".equalsIgnoreCase(myRole)) {
+            long reqId = roomDao.createJoinRequest(roomId, userId, me.id(), "invite");
+            broadcastJoinRequestCreated(roomId, reqId, userId, me.id());
+            broadcastRoomUpdate(roomId);
+            write(ctx, HttpResponseStatus.OK, Json.write(Map.of("ok", true, "pending_approval", true)));
+            return;
+        }
         SocialDao.JoinResult r = socialDao.inviteFriendToRoom(me.id(), roomId, userId);
         switch (r.outcome()) {
             case JOINED -> {
                 dao.findById(userId).ifPresent(u -> {
                     try {
+                        String targetName = u.displayName() != null && !u.displayName().isBlank() ? u.displayName() : u.username();
+                        roomDao.insertSystemMessage(roomId, me.id(), me.displayName() + " đã thêm " + targetName + " vào nhóm");
                         Map<String, Object> toNew = new LinkedHashMap<>();
                         toNew.put("type", "room_added");
                         toNew.put("room", roomJson(userId, roomId));
@@ -1722,6 +1759,8 @@ public final class HttpRestHandler extends SimpleChannelInboundHandler<FullHttpR
             write(ctx, HttpResponseStatus.FORBIDDEN, err("not_member"));
             return;
         }
+        RoomDao.RoomSettings settings = roomDao.getRoomSettings(roomId);
+        String role = roomDao.getMemberRole(roomId, me.id());
         JsonNode b = Json.tree(body(req));
         String name = b.has("name") && !b.get("name").isNull() ? b.get("name").asText().trim() : null;
         String avatar = b.has("avatar") ? (b.get("avatar").isNull() ? "" : b.get("avatar").asText()) : null;
@@ -1729,36 +1768,28 @@ public final class HttpRestHandler extends SimpleChannelInboundHandler<FullHttpR
         String emoji = b.has("emoji") && !b.get("emoji").isNull() ? b.get("emoji").asText() : null;
         String bg = b.has("bg") ? (b.get("bg").isNull() ? "" : b.get("bg").asText()) : null;
 
+        if ((name != null || avatar != null) && "member".equalsIgnoreCase(role) && !settings.allowMemberEditInfo()) {
+            write(ctx, HttpResponseStatus.FORBIDDEN, err("forbidden_member_edit_info"));
+            return;
+        }
+
         roomDao.updateRoom(roomId, name, avatar, theme, emoji, bg);
+        if (name != null && !name.isBlank()) {
+            roomDao.insertSystemMessage(roomId, me.id(), me.displayName() + " đã đổi tên nhóm thành \"" + name + "\"");
+        } else if (avatar != null) {
+            roomDao.insertSystemMessage(roomId, me.id(), me.displayName() + " đã cập nhật ảnh nhóm");
+        }
         broadcastRoomUpdate(roomId);
         write(ctx, HttpResponseStatus.OK, Json.write(Map.of("ok", true, "room", roomJson(me, roomId))));
     }
 
-        private void handleRoomMemberRole(ChannelHandlerContext ctx, FullHttpRequest req, String path) throws SQLException {
+    private void handleRoomMemberRole(ChannelHandlerContext ctx, FullHttpRequest req, String path) throws SQLException {
         User me = requireUser(ctx, bearer(req));
         if (me == null) return;
         String idStr = path.substring("/api/rooms/".length(), path.indexOf("/member/role"));
-        long roomId;
-        try {
-            roomId = Long.parseLong(idStr);
-        } catch (NumberFormatException e) {
-            write(ctx, HttpResponseStatus.BAD_REQUEST, err("bad_room"));
-            return;
-        }
+        long roomId = Long.parseLong(idStr);
         if (!isMember(roomId, me.id())) {
             write(ctx, HttpResponseStatus.FORBIDDEN, err("not_member"));
-            return;
-        }
-        RoomDao.RoomRow room = roomDao.findRoom(roomId).orElse(null);
-        if (room == null) {
-            write(ctx, HttpResponseStatus.NOT_FOUND, err("room_not_found"));
-            return;
-        }
-        List<RoomDao.MemberRow> members = roomDao.members(roomId);
-        boolean isLeader = members.stream().anyMatch(m -> m.userId() == me.id() && "leader".equalsIgnoreCase(m.role()))
-                || (room.createdBy() != null && room.createdBy() == me.id());
-        if (!isLeader) {
-            write(ctx, HttpResponseStatus.FORBIDDEN, err("not_leader"));
             return;
         }
         JsonNode b = Json.tree(body(req));
@@ -1768,16 +1799,56 @@ public final class HttpRestHandler extends SimpleChannelInboundHandler<FullHttpR
             write(ctx, HttpResponseStatus.BAD_REQUEST, err("missing_user"));
             return;
         }
-        if ("leader".equalsIgnoreCase(role) || "admin".equalsIgnoreCase(role)) {
-            roomDao.setSingleLeader(roomId, targetUserId);
-        } else {
-            roomDao.updateMemberRole(roomId, targetUserId, "member");
+        doSetMemberRole(ctx, me, roomId, targetUserId, role);
+    }
+
+    private void handleRoomMemberRolePath(ChannelHandlerContext ctx, FullHttpRequest req, String path) throws SQLException {
+        User me = requireUser(ctx, bearer(req));
+        if (me == null) return;
+        String[] parts = path.split("/");
+        long roomId = Long.parseLong(parts[3]);
+        long targetUserId = Long.parseLong(parts[5]);
+        if (!isMember(roomId, me.id())) {
+            write(ctx, HttpResponseStatus.FORBIDDEN, err("not_member"));
+            return;
         }
+        JsonNode b = Json.tree(body(req));
+        String role = nstr(b, "role");
+        doSetMemberRole(ctx, me, roomId, targetUserId, role);
+    }
+
+    private void doSetMemberRole(ChannelHandlerContext ctx, User me, long roomId, long targetUserId, String role) throws SQLException {
+        String myRole = roomDao.getMemberRole(roomId, me.id());
+        if (!"owner".equalsIgnoreCase(myRole)) {
+            write(ctx, HttpResponseStatus.FORBIDDEN, err("forbidden_not_owner"));
+            return;
+        }
+        if (targetUserId == me.id()) {
+            write(ctx, HttpResponseStatus.BAD_REQUEST, err("cannot_change_own_role"));
+            return;
+        }
+        String targetRole = roomDao.getMemberRole(roomId, targetUserId);
+        if ("owner".equalsIgnoreCase(targetRole)) {
+            write(ctx, HttpResponseStatus.FORBIDDEN, err("forbidden_cannot_modify_owner"));
+            return;
+        }
+        String newRole = "admin".equalsIgnoreCase(role) || "leader".equalsIgnoreCase(role) ? "admin" : "member";
+        roomDao.updateMemberRole(roomId, targetUserId, newRole);
+        dao.findById(targetUserId).ifPresent(u -> {
+            try {
+                String targetName = u.displayName() != null && !u.displayName().isBlank() ? u.displayName() : u.username();
+                if ("admin".equals(newRole)) {
+                    roomDao.insertSystemMessage(roomId, me.id(), me.displayName() + " đã bổ nhiệm " + targetName + " làm phó nhóm");
+                } else {
+                    roomDao.insertSystemMessage(roomId, me.id(), me.displayName() + " đã gỡ quyền phó nhóm của " + targetName);
+                }
+            } catch (Exception ignored) {}
+        });
         broadcastRoomUpdate(roomId);
         write(ctx, HttpResponseStatus.OK, Json.write(Map.of("ok", true, "room", roomJson(me, roomId))));
     }
 
-private void handleRoomMemberRemove(ChannelHandlerContext ctx, FullHttpRequest req, String path) throws SQLException {
+    private void handleRoomMemberRemove(ChannelHandlerContext ctx, FullHttpRequest req, String path) throws SQLException {
         User me = requireUser(ctx, bearer(req));
         if (me == null) return;
         String idStr = path.substring("/api/rooms/".length(), path.indexOf("/member/remove"));
@@ -1792,9 +1863,42 @@ private void handleRoomMemberRemove(ChannelHandlerContext ctx, FullHttpRequest r
             write(ctx, HttpResponseStatus.BAD_REQUEST, err("missing_user"));
             return;
         }
+        doRemoveMemberWithPermissions(ctx, me, roomId, targetUserId);
+    }
+
+    private void handleRoomMemberDelete(ChannelHandlerContext ctx, FullHttpRequest req, String path) throws SQLException {
+        User me = requireUser(ctx, bearer(req));
+        if (me == null) return;
+        String[] parts = path.split("/");
+        long roomId = Long.parseLong(parts[3]);
+        long targetUserId = Long.parseLong(parts[5]);
+        if (!isMember(roomId, me.id())) {
+            write(ctx, HttpResponseStatus.FORBIDDEN, err("not_member"));
+            return;
+        }
+        doRemoveMemberWithPermissions(ctx, me, roomId, targetUserId);
+    }
+
+    private void doRemoveMemberWithPermissions(ChannelHandlerContext ctx, User me, long roomId, long targetUserId) throws SQLException {
+        String myRole = roomDao.getMemberRole(roomId, me.id());
+        String targetRole = roomDao.getMemberRole(roomId, targetUserId);
+        if ("member".equalsIgnoreCase(myRole)) {
+            write(ctx, HttpResponseStatus.FORBIDDEN, err("forbidden_not_admin"));
+            return;
+        }
+        if ("owner".equalsIgnoreCase(targetRole)) {
+            write(ctx, HttpResponseStatus.FORBIDDEN, err("forbidden_cannot_modify_owner"));
+            return;
+        }
+        if ("admin".equalsIgnoreCase(myRole) && "admin".equalsIgnoreCase(targetRole)) {
+            write(ctx, HttpResponseStatus.FORBIDDEN, err("forbidden_cannot_modify_admin"));
+            return;
+        }
         roomDao.removeMember(roomId, targetUserId);
         dao.findById(targetUserId).ifPresent(u -> {
             try {
+                String targetName = u.displayName() != null && !u.displayName().isBlank() ? u.displayName() : u.username();
+                roomDao.insertSystemMessage(roomId, me.id(), me.displayName() + " đã xóa " + targetName + " khỏi nhóm");
                 registry.sendTo(u.username(), Map.of("type", "room_removed", "roomId", roomId));
             } catch (Exception ignored) {}
         });
@@ -1807,9 +1911,341 @@ private void handleRoomMemberRemove(ChannelHandlerContext ctx, FullHttpRequest r
         if (me == null) return;
         String idStr = path.substring("/api/rooms/".length(), path.indexOf("/leave"));
         long roomId = Long.parseLong(idStr);
+        if (!isMember(roomId, me.id())) {
+            write(ctx, HttpResponseStatus.FORBIDDEN, err("not_member"));
+            return;
+        }
+        String myRole = roomDao.getMemberRole(roomId, me.id());
+        List<RoomDao.MemberRow> members = roomDao.members(roomId);
+        if ("owner".equalsIgnoreCase(myRole)) {
+            long otherCount = members.stream().filter(m -> m.userId() != me.id()).count();
+            if (otherCount > 0) {
+                write(ctx, HttpResponseStatus.BAD_REQUEST, err("must_transfer_owner"));
+                return;
+            } else {
+                roomDao.dissolveRoom(roomId);
+                write(ctx, HttpResponseStatus.OK, Json.write(Map.of("ok", true, "dissolved", true)));
+                return;
+            }
+        }
         roomDao.removeMember(roomId, me.id());
+        roomDao.insertSystemMessage(roomId, me.id(), me.displayName() + " đã rời khỏi nhóm");
         broadcastRoomUpdate(roomId);
         write(ctx, HttpResponseStatus.OK, Json.write(Map.of("ok", true)));
+    }
+
+    private void handleRoomSettingsPatch(ChannelHandlerContext ctx, FullHttpRequest req, String path) throws SQLException {
+        User me = requireUser(ctx, bearer(req));
+        if (me == null) return;
+        String idStr = path.substring("/api/rooms/".length(), path.indexOf("/settings"));
+        long roomId = Long.parseLong(idStr);
+        if (!isMember(roomId, me.id())) {
+            write(ctx, HttpResponseStatus.FORBIDDEN, err("not_member"));
+            return;
+        }
+        String myRole = roomDao.getMemberRole(roomId, me.id());
+        if (!"owner".equalsIgnoreCase(myRole) && !"admin".equalsIgnoreCase(myRole)) {
+            write(ctx, HttpResponseStatus.FORBIDDEN, err("forbidden_not_admin"));
+            return;
+        }
+        JsonNode b = Json.tree(body(req));
+        if (b.has("action") && "regenerate_link".equals(b.get("action").asText())) {
+            String token = roomDao.regenerateJoinToken(roomId);
+            broadcastRoomUpdate(roomId);
+            write(ctx, HttpResponseStatus.OK, Json.write(Map.of("ok", true, "token", token)));
+            return;
+        }
+        Map<String, Object> patch = new LinkedHashMap<>();
+        if (b.has("settings") && b.get("settings").isObject()) {
+            b = b.get("settings");
+        }
+        for (var it = b.fields(); it.hasNext(); ) {
+            var e = it.next();
+            if (e.getValue().isBoolean()) {
+                patch.put(e.getKey(), e.getValue().asBoolean());
+            } else if (e.getValue().isTextual()) {
+                patch.put(e.getKey(), e.getValue().asText());
+            }
+        }
+        roomDao.updateRoomSettings(roomId, patch);
+        roomDao.insertSystemMessage(roomId, me.id(), me.displayName() + " đã cập nhật cài đặt nhóm");
+        broadcastRoomUpdate(roomId);
+        write(ctx, HttpResponseStatus.OK, Json.write(Map.of("ok", true, "settings", roomDao.getRoomSettings(roomId).toMap())));
+    }
+
+    private void handleRoomTransferOwner(ChannelHandlerContext ctx, FullHttpRequest req, String path) throws SQLException {
+        User me = requireUser(ctx, bearer(req));
+        if (me == null) return;
+        String idStr = path.substring("/api/rooms/".length(), path.indexOf("/transfer-owner"));
+        long roomId = Long.parseLong(idStr);
+        if (!isMember(roomId, me.id())) {
+            write(ctx, HttpResponseStatus.FORBIDDEN, err("not_member"));
+            return;
+        }
+        String myRole = roomDao.getMemberRole(roomId, me.id());
+        if (!"owner".equalsIgnoreCase(myRole)) {
+            write(ctx, HttpResponseStatus.FORBIDDEN, err("forbidden_not_owner"));
+            return;
+        }
+        JsonNode b = Json.tree(body(req));
+        Long newOwnerId = longNode(b, "new_owner_id");
+        if (newOwnerId == null || newOwnerId == me.id()) {
+            write(ctx, HttpResponseStatus.BAD_REQUEST, err("invalid_new_owner"));
+            return;
+        }
+        boolean ok = roomDao.transferOwner(roomId, me.id(), newOwnerId);
+        if (!ok) {
+            write(ctx, HttpResponseStatus.BAD_REQUEST, err("transfer_failed"));
+            return;
+        }
+        dao.findById(newOwnerId).ifPresent(u -> {
+            try {
+                String targetName = u.displayName() != null && !u.displayName().isBlank() ? u.displayName() : u.username();
+                roomDao.insertSystemMessage(roomId, me.id(), me.displayName() + " đã chuyển quyền trưởng nhóm cho " + targetName);
+            } catch (Exception ignored) {}
+        });
+        broadcastRoomUpdate(roomId);
+        write(ctx, HttpResponseStatus.OK, Json.write(Map.of("ok", true, "room", roomJson(me, roomId))));
+    }
+
+    private void handleRoomDissolve(ChannelHandlerContext ctx, FullHttpRequest req, String path) throws SQLException {
+        User me = requireUser(ctx, bearer(req));
+        if (me == null) return;
+        String idStr = path.substring("/api/rooms/".length(), path.indexOf("/dissolve"));
+        long roomId = Long.parseLong(idStr);
+        if (!isMember(roomId, me.id())) {
+            write(ctx, HttpResponseStatus.FORBIDDEN, err("not_member"));
+            return;
+        }
+        String myRole = roomDao.getMemberRole(roomId, me.id());
+        if (!"owner".equalsIgnoreCase(myRole)) {
+            write(ctx, HttpResponseStatus.FORBIDDEN, err("forbidden_not_owner"));
+            return;
+        }
+        List<RoomDao.MemberRow> members = roomDao.members(roomId);
+        roomDao.dissolveRoom(roomId);
+        for (RoomDao.MemberRow m : members) {
+            dao.findById(m.userId()).ifPresent(u -> {
+                try {
+                    registry.sendTo(u.username(), Map.of("type", "room_dissolved", "roomId", roomId));
+                    registry.sendTo(u.username(), Map.of("type", "room_removed", "roomId", roomId));
+                } catch (Exception ignored) {}
+            });
+        }
+        write(ctx, HttpResponseStatus.OK, Json.write(Map.of("ok", true)));
+    }
+
+    private void handleRoomBlocksList(ChannelHandlerContext ctx, FullHttpRequest req, String path) throws SQLException {
+        User me = requireUser(ctx, bearer(req));
+        if (me == null) return;
+        String idStr = path.substring("/api/rooms/".length(), path.indexOf("/blocks"));
+        long roomId = Long.parseLong(idStr);
+        if (!isMember(roomId, me.id())) {
+            write(ctx, HttpResponseStatus.FORBIDDEN, err("not_member"));
+            return;
+        }
+        String myRole = roomDao.getMemberRole(roomId, me.id());
+        if (!"owner".equalsIgnoreCase(myRole) && !"admin".equalsIgnoreCase(myRole)) {
+            write(ctx, HttpResponseStatus.FORBIDDEN, err("forbidden_not_admin"));
+            return;
+        }
+        List<RoomDao.BlockRow> blocks = roomDao.listBlocks(roomId);
+        List<Map<String, Object>> list = blocks.stream().map(RoomDao.BlockRow::toMap).toList();
+        write(ctx, HttpResponseStatus.OK, Json.write(Map.of("ok", true, "blocks", list)));
+    }
+
+    private void handleRoomBlockAdd(ChannelHandlerContext ctx, FullHttpRequest req, String path) throws SQLException {
+        User me = requireUser(ctx, bearer(req));
+        if (me == null) return;
+        String[] parts = path.split("/");
+        long roomId = Long.parseLong(parts[3]);
+        long targetUserId = Long.parseLong(parts[5]);
+        if (!isMember(roomId, me.id())) {
+            write(ctx, HttpResponseStatus.FORBIDDEN, err("not_member"));
+            return;
+        }
+        String myRole = roomDao.getMemberRole(roomId, me.id());
+        if (!"owner".equalsIgnoreCase(myRole) && !"admin".equalsIgnoreCase(myRole)) {
+            write(ctx, HttpResponseStatus.FORBIDDEN, err("forbidden_not_admin"));
+            return;
+        }
+        String targetRole = roomDao.getMemberRole(roomId, targetUserId);
+        if ("owner".equalsIgnoreCase(targetRole)) {
+            write(ctx, HttpResponseStatus.FORBIDDEN, err("forbidden_cannot_modify_owner"));
+            return;
+        }
+        if ("admin".equalsIgnoreCase(myRole) && "admin".equalsIgnoreCase(targetRole)) {
+            write(ctx, HttpResponseStatus.FORBIDDEN, err("forbidden_cannot_modify_admin"));
+            return;
+        }
+        JsonNode b = Json.tree(body(req));
+        String reason = nstr(b, "reason");
+        roomDao.blockMember(roomId, targetUserId, me.id(), reason);
+        dao.findById(targetUserId).ifPresent(u -> {
+            try {
+                String targetName = u.displayName() != null && !u.displayName().isBlank() ? u.displayName() : u.username();
+                roomDao.insertSystemMessage(roomId, me.id(), me.displayName() + " đã chặn " + targetName + " khỏi nhóm");
+                registry.sendTo(u.username(), Map.of("type", "room_removed", "roomId", roomId));
+            } catch (Exception ignored) {}
+        });
+        broadcastRoomUpdate(roomId);
+        write(ctx, HttpResponseStatus.OK, Json.write(Map.of("ok", true)));
+    }
+
+    private void handleRoomBlockRemove(ChannelHandlerContext ctx, FullHttpRequest req, String path) throws SQLException {
+        User me = requireUser(ctx, bearer(req));
+        if (me == null) return;
+        String[] parts = path.split("/");
+        long roomId = Long.parseLong(parts[3]);
+        long targetUserId = Long.parseLong(parts[5]);
+        if (!isMember(roomId, me.id())) {
+            write(ctx, HttpResponseStatus.FORBIDDEN, err("not_member"));
+            return;
+        }
+        String myRole = roomDao.getMemberRole(roomId, me.id());
+        if (!"owner".equalsIgnoreCase(myRole) && !"admin".equalsIgnoreCase(myRole)) {
+            write(ctx, HttpResponseStatus.FORBIDDEN, err("forbidden_not_admin"));
+            return;
+        }
+        roomDao.unblockMember(roomId, targetUserId);
+        dao.findById(targetUserId).ifPresent(u -> {
+            try {
+                String targetName = u.displayName() != null && !u.displayName().isBlank() ? u.displayName() : u.username();
+                roomDao.insertSystemMessage(roomId, me.id(), me.displayName() + " đã bỏ chặn " + targetName);
+            } catch (Exception ignored) {}
+        });
+        write(ctx, HttpResponseStatus.OK, Json.write(Map.of("ok", true)));
+    }
+
+    private void handleJoinRequestsList(ChannelHandlerContext ctx, FullHttpRequest req, String path) throws SQLException {
+        User me = requireUser(ctx, bearer(req));
+        if (me == null) return;
+        String idStr = path.substring("/api/rooms/".length(), path.indexOf("/join-requests"));
+        long roomId = Long.parseLong(idStr);
+        if (!isMember(roomId, me.id())) {
+            write(ctx, HttpResponseStatus.FORBIDDEN, err("not_member"));
+            return;
+        }
+        String myRole = roomDao.getMemberRole(roomId, me.id());
+        if (!"owner".equalsIgnoreCase(myRole) && !"admin".equalsIgnoreCase(myRole)) {
+            write(ctx, HttpResponseStatus.FORBIDDEN, err("forbidden_not_admin"));
+            return;
+        }
+        List<RoomDao.JoinRequestRow> reqs = roomDao.listPendingJoinRequests(roomId);
+        List<Map<String, Object>> list = reqs.stream().map(RoomDao.JoinRequestRow::toMap).toList();
+        write(ctx, HttpResponseStatus.OK, Json.write(Map.of("ok", true, "requests", list)));
+    }
+
+    private void handleJoinRequestDecision(ChannelHandlerContext ctx, FullHttpRequest req, String path) throws SQLException {
+        User me = requireUser(ctx, bearer(req));
+        if (me == null) return;
+        String[] parts = path.split("/");
+        long roomId = Long.parseLong(parts[3]);
+        long reqId = Long.parseLong(parts[5]);
+        String action = parts[6];
+        if (!isMember(roomId, me.id())) {
+            write(ctx, HttpResponseStatus.FORBIDDEN, err("not_member"));
+            return;
+        }
+        String myRole = roomDao.getMemberRole(roomId, me.id());
+        if (!"owner".equalsIgnoreCase(myRole) && !"admin".equalsIgnoreCase(myRole)) {
+            write(ctx, HttpResponseStatus.FORBIDDEN, err("forbidden_not_admin"));
+            return;
+        }
+        Optional<RoomDao.JoinRequestRow> jrOpt = roomDao.findJoinRequest(reqId);
+        if (jrOpt.isEmpty() || !"pending".equalsIgnoreCase(jrOpt.get().status())) {
+            write(ctx, HttpResponseStatus.OK, Json.write(Map.of("ok", true, "already_decided", true,
+                    "decided_by", jrOpt.map(r -> r.decidedBy() != null ? r.decidedBy() : 0).orElse(0L))));
+            return;
+        }
+        RoomDao.JoinRequestRow jr = jrOpt.get();
+        if ("approve".equalsIgnoreCase(action)) {
+            if (roomDao.isUserBlocked(roomId, jr.userId())) {
+                write(ctx, HttpResponseStatus.FORBIDDEN, err("forbidden_member_blocked"));
+                return;
+            }
+            boolean resolved = roomDao.resolveJoinRequest(reqId, "approved", me.id());
+            if (resolved) {
+                roomDao.addOrRestoreMember(roomId, jr.userId(), "member");
+                dao.findById(jr.userId()).ifPresent(u -> {
+                    try {
+                        String targetName = u.displayName() != null && !u.displayName().isBlank() ? u.displayName() : u.username();
+                        roomDao.insertSystemMessage(roomId, me.id(), targetName + " đã tham gia nhóm (được duyệt bởi " + me.displayName() + ")");
+                        Map<String, Object> toNew = new LinkedHashMap<>();
+                        toNew.put("type", "room_added");
+                        toNew.put("room", roomJson(jr.userId(), roomId));
+                        registry.sendTo(u.username(), toNew);
+                    } catch (Exception ignored) {}
+                });
+                broadcastRoomUpdate(roomId);
+            }
+            write(ctx, HttpResponseStatus.OK, Json.write(Map.of("ok", true, "status", "approved")));
+        } else {
+            roomDao.resolveJoinRequest(reqId, "rejected", me.id());
+            broadcastRoomUpdate(roomId);
+            write(ctx, HttpResponseStatus.OK, Json.write(Map.of("ok", true, "status", "rejected")));
+        }
+    }
+
+    private void handleJoinRequestsApproveAll(ChannelHandlerContext ctx, FullHttpRequest req, String path) throws SQLException {
+        User me = requireUser(ctx, bearer(req));
+        if (me == null) return;
+        String idStr = path.substring("/api/rooms/".length(), path.indexOf("/join-requests/approve-all"));
+        long roomId = Long.parseLong(idStr);
+        if (!isMember(roomId, me.id())) {
+            write(ctx, HttpResponseStatus.FORBIDDEN, err("not_member"));
+            return;
+        }
+        String myRole = roomDao.getMemberRole(roomId, me.id());
+        if (!"owner".equalsIgnoreCase(myRole) && !"admin".equalsIgnoreCase(myRole)) {
+            write(ctx, HttpResponseStatus.FORBIDDEN, err("forbidden_not_admin"));
+            return;
+        }
+        List<RoomDao.JoinRequestRow> reqs = roomDao.listPendingJoinRequests(roomId);
+        int approvedCount = 0;
+        for (RoomDao.JoinRequestRow jr : reqs) {
+            if (roomDao.isUserBlocked(roomId, jr.userId())) continue;
+            boolean resolved = roomDao.resolveJoinRequest(jr.id(), "approved", me.id());
+            if (resolved) {
+                approvedCount++;
+                roomDao.addOrRestoreMember(roomId, jr.userId(), "member");
+                dao.findById(jr.userId()).ifPresent(u -> {
+                    try {
+                        String targetName = u.displayName() != null && !u.displayName().isBlank() ? u.displayName() : u.username();
+                        roomDao.insertSystemMessage(roomId, me.id(), targetName + " đã tham gia nhóm (được duyệt bởi " + me.displayName() + ")");
+                        Map<String, Object> toNew = new LinkedHashMap<>();
+                        toNew.put("type", "room_added");
+                        toNew.put("room", roomJson(jr.userId(), roomId));
+                        registry.sendTo(u.username(), toNew);
+                    } catch (Exception ignored) {}
+                });
+            }
+        }
+        if (approvedCount > 0) {
+            broadcastRoomUpdate(roomId);
+        }
+        write(ctx, HttpResponseStatus.OK, Json.write(Map.of("ok", true, "approved_count", approvedCount)));
+    }
+
+    private void broadcastJoinRequestCreated(long roomId, long reqId, long candidateId, Long invitedBy) {
+        try {
+            List<RoomDao.MemberRow> members = roomDao.members(roomId);
+            for (RoomDao.MemberRow m : members) {
+                if ("owner".equalsIgnoreCase(m.role()) || "admin".equalsIgnoreCase(m.role())) {
+                    dao.findById(m.userId()).ifPresent(u -> {
+                        try {
+                            Map<String, Object> msg = new LinkedHashMap<>();
+                            msg.put("type", "join_request_created");
+                            msg.put("roomId", roomId);
+                            msg.put("requestId", reqId);
+                            msg.put("candidateId", candidateId);
+                            msg.put("count", roomDao.countPendingJoinRequests(roomId));
+                            registry.sendTo(u.username(), msg);
+                        } catch (Exception ignored) {}
+                    });
+                }
+            }
+        } catch (Exception ignored) {}
     }
 
     private boolean isMember(long roomId, long userId) throws SQLException {
@@ -2241,6 +2677,14 @@ private void handleRoomMemberRemove(ChannelHandlerContext ctx, FullHttpRequest r
             write(ctx, HttpResponseStatus.FORBIDDEN, err("not_member"));
             return;
         }
+        RoomDao.RoomSettings settings = roomDao.getRoomSettings(roomId);
+        if (!settings.allowMemberSend()) {
+            String role = roomDao.getMemberRole(roomId, me.id());
+            if ("member".equalsIgnoreCase(role)) {
+                write(ctx, HttpResponseStatus.FORBIDDEN, err("forbidden_member_send"));
+                return;
+            }
+        }
         String clientMsgId = nstr(b, "client_msg_id");
         if (clientMsgId == null || clientMsgId.length() < 8 || clientMsgId.length() > 64
                 || !clientMsgId.matches("^[0-9A-Za-z_:-]+$")) {
@@ -2522,6 +2966,15 @@ private void handleRoomMemberRemove(ChannelHandlerContext ctx, FullHttpRequest r
         room.put("created_by", r.createdBy());
         room.put("last_at", lastMs);
         room.put("members", memberJson);
+        RoomDao.RoomSettings settings = roomDao.getRoomSettings(roomId);
+        room.put("settings", settings.toMap());
+        boolean isPrivileged = members.stream()
+                .anyMatch(m -> m.userId() == viewerId && ("owner".equalsIgnoreCase(m.role()) || "admin".equalsIgnoreCase(m.role())));
+        if (isPrivileged) {
+            room.put("pending_join_requests_count", roomDao.countPendingJoinRequests(roomId));
+        } else {
+            room.put("pending_join_requests_count", 0);
+        }
         return room;
     }
 
@@ -2563,6 +3016,14 @@ private void handleRoomMemberRemove(ChannelHandlerContext ctx, FullHttpRequest r
         RoomCtx rc = requireRoomMember(ctx, req, path);
         if (rc == null) {
             return;
+        }
+        RoomDao.RoomSettings settings = roomDao.getRoomSettings(rc.roomId());
+        if (!settings.allowMemberSend()) {
+            String role = roomDao.getMemberRole(rc.roomId(), rc.me().id());
+            if ("member".equalsIgnoreCase(role)) {
+                write(ctx, HttpResponseStatus.FORBIDDEN, err("forbidden_member_send"));
+                return;
+            }
         }
         if (!rateAllow("msg:" + rc.me().id(), 60, 60_000L)) {
             write(ctx, HttpResponseStatus.TOO_MANY_REQUESTS, err("rate_limited"));
