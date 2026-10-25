@@ -10,7 +10,6 @@ import {
   decideOnInvite,
   callErrorReason,
   callStateAction,
-  shouldMarkAnsweredByPeer,
   type CallLocalPhase,
   type LocalCallView,
 } from "../../lib/callGuard"
@@ -933,40 +932,31 @@ export function useCallManager({
       pushToast(message)
     }
     if (f.signal === "accept" || f.signal === "answer") {
-      const cur = callStateRef.current
-      // Trong cuộc gọi NHÓM, Core phát `accept` của người trả lời cho cả phòng. Máy đang
-      // đổ chuông (cuộc gọi ĐẾN) cũng nhận khung này nên KHÔNG được đổi trạng thái —
-      // chỉ bên GỌI ĐI mới chuyển sang "đang kết nối" (xem shouldMarkAnsweredByPeer).
-      const answered = shouldMarkAnsweredByPeer({
-        currentDir: cur?.dir,
-        currentCallId: cur?.callId,
-        currentRoomId: cur?.roomId,
-        frameCallId: f.callId,
-        frameRoomId: f.roomId,
-      })
-      callDebug("accept-nhan-duoc", {
-        callId: f.callId,
-        roomId: f.roomId,
-        from: f.fromUserId,
-        dir: cur?.dir,
-        localCallId: cur?.callId,
-        markAnswered: answered,
-      })
-      if (answered && cur) {
-        clearCallTimers()
+      clearCallTimers()
+      if (
+        callStateRef.current &&
+        (callStateRef.current.callId === f.callId ||
+          (callStateRef.current.roomId !== undefined &&
+            callStateRef.current.roomId === f.roomId))
+      ) {
         callStateRef.current = {
-          ...cur,
+          ...callStateRef.current,
           acked: true,
-          state: cur.state === "calling" ? "connecting" : cur.state,
+          state:
+            callStateRef.current.state === "calling"
+              ? "connecting"
+              : callStateRef.current.state,
         }
-        setCall((c) =>
-          c && c.callId === cur.callId
+        setCall((cur) =>
+          cur &&
+          (cur.callId === f.callId ||
+            (cur.roomId !== undefined && cur.roomId === f.roomId))
             ? {
-                ...c,
+                ...cur,
                 acked: true,
-                state: c.state === "calling" ? "connecting" : c.state,
+                state: cur.state === "calling" ? "connecting" : cur.state,
               }
-            : c,
+            : cur,
         )
       }
     }
