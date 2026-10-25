@@ -126,6 +126,38 @@ export function callStateAction(input: CallStateInput): CallStateAction {
   return "ignore"
 }
 
+export interface AnsweredFrameInput {
+  /** Chiều của cuộc gọi đang giữ ở máy này (`undefined` nếu không có cuộc gọi). */
+  currentDir?: "in" | "out"
+  /** callId của cuộc gọi hiện tại ở máy ta. */
+  currentCallId?: string
+  /** roomId của cuộc gọi hiện tại (khung cũ không kèm callId). */
+  currentRoomId?: number
+  /** callId trên khung `accept`/`answer`. */
+  frameCallId?: string
+  /** roomId trên khung `accept`/`answer`. */
+  frameRoomId?: number
+}
+
+/**
+ * Trong cuộc gọi NHÓM, Peer Core phát khung `accept` của người vừa trả lời cho **cả phòng**.
+ * Máy đang đổ chuông (cuộc gọi ĐẾN) cũng nhận được khung đó; nếu cứ so khớp callId/roomId
+ * thì máy thứ 3 tưởng "cuộc gọi của mình đã được trả lời" → tự chuyển "đang kết nối" và
+ * mất nút "Trả lời" (không vào được cuộc gọi).
+ *
+ * Vì vậy CHỈ bên GỌI ĐI mới được đổi trạng thái khi nhận `accept`/`answer`.
+ * Khung vẫn được chuyển tiếp xuống `CallSession.handle()` để mesh WebRTC hoạt động.
+ */
+export function shouldMarkAnsweredByPeer(input: AnsweredFrameInput): boolean {
+  const { currentDir, currentCallId, currentRoomId, frameCallId, frameRoomId } = input
+  if (currentDir !== "out") return false
+  if (currentCallId && frameCallId) return currentCallId === frameCallId
+  if (currentRoomId !== undefined && frameRoomId !== undefined) {
+    return Number(currentRoomId) === Number(frameRoomId)
+  }
+  return false
+}
+
 export interface InviteFrame {
   callId?: string
   signal?: string
