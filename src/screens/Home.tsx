@@ -1598,13 +1598,20 @@ export function Home({ darkMode, onToggleDark, onLogout, inviteTarget, onInviteC
                 let added = 0
                 let already = 0
                 let failed = 0
+                let pendingApproval = 0
                 let lastErrStatus = 0
                 for (const m of members) {
                   const r = await api.roomMemberAdd(rid, m.id)
                   if (r.ok && r.data) {
-                    lastRoom = r.data.room
-                    if (r.data.already_member) already++
-                    else added++
+                    if (r.data.pending_approval) {
+                      pendingApproval++
+                    } else if (r.data.already_member) {
+                      already++
+                      lastRoom = r.data.room
+                    } else {
+                      added++
+                      lastRoom = r.data.room
+                    }
                   } else {
                     failed++
                     lastErrStatus = r.status
@@ -1621,10 +1628,16 @@ export function Home({ darkMode, onToggleDark, onLogout, inviteTarget, onInviteC
                       online: m.online,
                       publicId: m.public_id,
                       avatar: m.avatar || undefined,
+                      role: m.role,
                     })),
                   })
                 }
                 const parts: string[] = []
+                if (pendingApproval > 0) {
+                  parts.push(
+                    `Đã gửi yêu cầu phê duyệt cho ${pendingApproval} người tới trưởng nhóm`,
+                  )
+                }
                 if (added > 0) parts.push(`Đã thêm ${added} người vào nhóm`)
                 if (already > 0) parts.push(`${already} người đã ở trong nhóm`)
                 if (failed > 0) {

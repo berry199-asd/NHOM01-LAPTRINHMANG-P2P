@@ -1696,7 +1696,8 @@ public final class HttpRestHandler extends SimpleChannelInboundHandler<FullHttpR
         }
         RoomDao.RoomSettings settings = roomDao.getRoomSettings(roomId);
         String myRole = roomDao.getMemberRole(roomId, me.id());
-        if (settings.requireJoinApproval() && "member".equalsIgnoreCase(myRole)) {
+        boolean isPrivileged = "owner".equalsIgnoreCase(myRole) || "admin".equalsIgnoreCase(myRole);
+        if (settings.requireJoinApproval() && !isPrivileged) {
             long reqId = roomDao.createJoinRequest(roomId, userId, me.id(), "invite");
             broadcastJoinRequestCreated(roomId, reqId, userId, me.id());
             broadcastRoomUpdate(roomId);

@@ -1148,20 +1148,37 @@ public final class RoomDao {
     }
 
     public String getMemberRole(long roomId, long userId) throws SQLException {
-        try (Connection c = ds.getConnection();
-             PreparedStatement p = c.prepareStatement(
-                     "SELECT room_role FROM room_members WHERE room_id = ? AND user_id = ? AND left_at IS NULL AND banned_at IS NULL LIMIT 1")) {
-            p.setLong(1, roomId);
-            p.setLong(2, userId);
-            try (ResultSet rs = p.executeQuery()) {
-                if (rs.next()) {
-                    String r = rs.getString("room_role");
-                    if ("leader".equalsIgnoreCase(r)) return "owner";
-                    return r.toLowerCase();
+        try (Connection c = ds.getConnection()) {
+            try (PreparedStatement p = c.prepareStatement(
+                    "SELECT room_role FROM room_members WHERE room_id = ? AND user_id = ? AND left_at IS NULL AND banned_at IS NULL LIMIT 1")) {
+                p.setLong(1, roomId);
+                p.setLong(2, userId);
+                try (ResultSet rs = p.executeQuery()) {
+                    if (rs.next()) {
+                        String r = rs.getString("room_role");
+                        if (r != null && !r.isBlank()) {
+                            if ("leader".equalsIgnoreCase(r)) return "owner";
+                            return r.toLowerCase();
+                        }
+                    }
+                }
+            }
+
+            // Fallback: check creator of room
+            try (PreparedStatement pRoom = c.prepareStatement(
+                    "SELECT created_by FROM rooms WHERE id = ? LIMIT 1")) {
+                pRoom.setLong(1, roomId);
+                try (ResultSet rsRoom = pRoom.executeQuery()) {
+                    if (rsRoom.next()) {
+                        long creator = rsRoom.getLong("created_by");
+                        if (creator > 0 && creator == userId) {
+                            return "owner";
+                        }
+                    }
                 }
             }
         }
-        return "";
+        return "member";
     }
 
     public boolean transferOwner(long roomId, long currentOwnerId, long newOwnerId) throws SQLException {

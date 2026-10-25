@@ -967,13 +967,56 @@ export function InfoPanel({
                       Phê duyệt thành viên mới
                     </span>
                     <Toggle
-                      value={!!conv.approval}
-                      onChange={() => {
-                        onPatch({ approval: !conv.approval })
+                      value={
+                        conv.settings?.require_join_approval ?? !!conv.approval
+                      }
+                      onChange={async () => {
+                        const currentVal =
+                          conv.settings?.require_join_approval ?? !!conv.approval
+                        const newVal = !currentVal
+                        const rid = conv.realId
+                        if (rid) {
+                          const res = await api.updateRoomSettings(rid, {
+                            require_join_approval: newVal,
+                          })
+                          if (res.ok) {
+                            onPatch({
+                              approval: newVal,
+                              settings: res.data?.settings ?? {
+                                ...(conv.settings || {
+                                  allow_member_edit_info: true,
+                                  allow_member_pin: true,
+                                  allow_member_notes_reminders: true,
+                                  allow_member_polls: true,
+                                  allow_member_send: true,
+                                  require_join_approval: newVal,
+                                  highlight_admin_messages: true,
+                                  new_member_read_recent: true,
+                                  join_link_enabled: false,
+                                  join_token: "",
+                                }),
+                                require_join_approval: newVal,
+                              },
+                            })
+                            onPushToast(
+                              newVal
+                                ? "Đã bật phê duyệt thành viên mới"
+                                : "Đã tắt phê duyệt thành viên mới",
+                            )
+                            return
+                          } else {
+                            onPushToast(
+                              "Không thể lưu cài đặt: " +
+                                (res.error || "Lỗi máy chủ"),
+                            )
+                            return
+                          }
+                        }
+                        onPatch({ approval: newVal })
                         onPushToast(
-                          conv.approval
-                            ? "Đã tắt phê duyệt thành viên mới"
-                            : "Đã bật phê duyệt thành viên mới",
+                          newVal
+                            ? "Đã bật phê duyệt thành viên mới"
+                            : "Đã tắt phê duyệt thành viên mới",
                         )
                       }}
                     />
