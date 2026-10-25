@@ -8,6 +8,8 @@ const API_BASE =
 const TOKEN_KEY = "workchat_token"
 const ADMIN_TOKEN_KEY = "workchat_admin_token"
 
+import type { RoomSettings, JoinRequest, RoomBlock } from "../types/chat"
+
 export interface ApiUser {
   id: number
   username: string
@@ -155,7 +157,7 @@ export interface ApiRoomMember {
   username: string
   display_name: string
   avatar: string
-  role: "member" | "leader"
+  role: "member" | "leader" | "owner" | "admin"
   online: boolean
   last_seen_at?: number
   last_read_message_id: string
@@ -170,8 +172,11 @@ export interface ApiRoom {
   theme_color: string
   default_reaction_emoji?: string
   created_at: number
+  created_by?: number
   last_at: number
   members: ApiRoomMember[]
+  settings?: RoomSettings
+  pending_join_requests_count?: number
 }
 
 interface CreateRoomBody {
@@ -578,6 +583,64 @@ export const api = {
     }),
   roomLeave: (roomId: number) =>
     postWithAuth<{ ok: boolean }>(`/api/rooms/${roomId}/leave`, {}),
+  updateRoomSettings: (roomId: number, settings: Partial<RoomSettings>) =>
+    postWithAuth<{ ok: boolean; settings: RoomSettings }>(
+      `/api/rooms/${roomId}/settings`,
+      settings,
+    ),
+  regenerateRoomJoinToken: (roomId: number) =>
+    postWithAuth<{ ok: boolean; token: string }>(
+      `/api/rooms/${roomId}/settings`,
+      { action: "regenerate_link" },
+    ),
+  setRoomMemberRole: (
+    roomId: number,
+    userId: number,
+    role: "owner" | "admin" | "member" | "leader",
+  ) =>
+    postWithAuth<{ ok: boolean; room?: ApiRoom }>(
+      `/api/rooms/${roomId}/members/${userId}/role`,
+      { role },
+    ),
+  transferRoomOwner: (roomId: number, newOwnerId: number) =>
+    postWithAuth<{ ok: boolean; room?: ApiRoom }>(
+      `/api/rooms/${roomId}/transfer-owner`,
+      { new_owner_id: newOwnerId },
+    ),
+  dissolveRoom: (roomId: number) =>
+    postWithAuth<{ ok: boolean }>(`/api/rooms/${roomId}/dissolve`, {}),
+  removeRoomMember: (roomId: number, userId: number) =>
+    delWithAuth<{ ok: boolean }>(`/api/rooms/${roomId}/members/${userId}`),
+  getRoomBlocks: (roomId: number) =>
+    getWithAuth<{ ok: boolean; blocks: RoomBlock[] }>(
+      `/api/rooms/${roomId}/blocks`,
+    ),
+  blockRoomMember: (roomId: number, userId: number, reason?: string) =>
+    postWithAuth<{ ok: boolean }>(`/api/rooms/${roomId}/blocks/${userId}`, {
+      reason,
+    }),
+  unblockRoomMember: (roomId: number, userId: number) =>
+    delWithAuth<{ ok: boolean }>(`/api/rooms/${roomId}/blocks/${userId}`),
+  getRoomJoinRequests: (roomId: number) =>
+    getWithAuth<{ ok: boolean; requests: JoinRequest[] }>(
+      `/api/rooms/${roomId}/join-requests`,
+    ),
+  decideRoomJoinRequest: (
+    roomId: number,
+    requestId: number,
+    action: "approve" | "reject",
+  ) =>
+    postWithAuth<{
+      ok: boolean
+      status?: string
+      already_decided?: boolean
+      decided_by?: number
+    }>(`/api/rooms/${roomId}/join-requests/${requestId}/${action}`, {}),
+  approveAllRoomJoinRequests: (roomId: number) =>
+    postWithAuth<{ ok: boolean; approved_count: number }>(
+      `/api/rooms/${roomId}/join-requests/approve-all`,
+      {},
+    ),
   editMessage: (roomId: number, clientMsgId: string) =>
     postPathWithAuth<{ message: ApiMessage }>(
       `/api/rooms/${roomId}/messages/${encodeURIComponent(clientMsgId)}/edit`,

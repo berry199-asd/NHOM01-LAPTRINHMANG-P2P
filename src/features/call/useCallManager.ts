@@ -250,6 +250,9 @@ export function useCallManager({
   }
 
   const handleCallPhase = (callId: string, phase: CallPhase) => {
+    if (phase === "active") {
+      clearCallTimers()
+    }
     if (callStateRef.current?.callId === callId) {
       if (phase === "active") {
         callStateRef.current = {
@@ -667,6 +670,38 @@ export function useCallManager({
         finalizeCall("unreachable")
       }
     }, CALL_ACK_TIMEOUT_MS)
+
+    // Cuộc gọi nhóm: Sau 30 giây không ai nghe máy thì bên gọi sẽ tự động ngắt cuộc gọi.
+    if (conv.isGroup) {
+      waitCall(() => {
+        const cur = callStateRef.current
+        if (
+          cur &&
+          cur.callId === callId &&
+          cur.dir === "out" &&
+          cur.isGroup &&
+          cur.state !== "in-call" &&
+          cur.state !== "ended" &&
+          cur.state !== "failed"
+        ) {
+          const remoteAnswered = (cur.participants ?? []).some(
+            (p) => p.userId && p.userId !== meId,
+          )
+          if (!remoteAnswered) {
+            callDebug("het-han-goi-nhom-30s", { callId })
+            pushToast("Không ai nghe máy — cuộc gọi nhóm đã tự động kết thúc")
+            const s = callSessionRef.current
+            if (s) {
+              try {
+                s.hangup("cancel")
+              } catch {}
+            }
+            callSessionRef.current = null
+            finalizeCall("no-answer")
+          }
+        }
+      }, 30000)
+    }
   }
 
   /**
@@ -674,6 +709,10 @@ export function useCallManager({
    * (lời mời đã thực sự tới UI người nhận). Trước ack, việc chờ do timer ack quản lý.
    */
   const startNoAnswerTimer = (callId: string) => {
+    if (callStateRef.current?.isGroup) {
+      // Cuộc gọi nhóm dùng đồng hồ riêng 30 giây được quản lý từ lúc bắt đầu gọi
+      return
+    }
     waitCall(() => {
       const cur = callStateRef.current
       if (cur && cur.callId === callId && cur.state === "calling" && cur.acked) {

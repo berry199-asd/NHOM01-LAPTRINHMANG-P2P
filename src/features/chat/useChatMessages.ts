@@ -7,7 +7,7 @@ import type {
   PeerUploadResult,
 } from "../../types/chat"
 import { formatBytes } from "../../types/chat"
-import { themeIcon } from "./emojiData"
+import { themeIcon, EMOJI_CHOICE } from "./emojiData"
 import { initialsOf, colorForName } from "./bubbles/VoiceBubble"
 import { readVideoMeta } from "./bubbles/QuoteBlock"
 import { formatClock, nowTime as now, genClientId, callLabel } from "../rooms/useRoomManagement"
@@ -144,6 +144,39 @@ export const mediaRefToFile = (text: string | null | undefined): ChatFile | unde
   } catch {
     return undefined
   }
+}
+
+export function parseChatPayload(
+  rawText: string | null | undefined,
+  fallbackEmoji?: string,
+): {
+  text: string
+  kind: "chat" | "call"
+  callData?: MessageCallData
+  isLike: boolean
+} {
+  if (!rawText) return { text: "", kind: "chat", isLike: false }
+  if (rawText.startsWith('{"kind":"call"')) {
+    try {
+      const p = JSON.parse(rawText)
+      if (p.kind === "call" && p.call) {
+        return { text: rawText, kind: "call", callData: p.call, isLike: false }
+      }
+    } catch {}
+  }
+  if (rawText.startsWith('{"kind":"like"')) {
+    try {
+      const p = JSON.parse(rawText)
+      if (p.kind === "like" && p.emoji) {
+        return { text: p.emoji, kind: "chat", isLike: true }
+      }
+    } catch {}
+  }
+  const trimmed = rawText.trim()
+  if (trimmed && (trimmed === fallbackEmoji || EMOJI_CHOICE.includes(trimmed))) {
+    return { text: trimmed, kind: "chat", isLike: true }
+  }
+  return { text: rawText, kind: "chat", isLike: false }
 }
 
 export function useChatMessages({
@@ -545,17 +578,8 @@ export function useChatMessages({
             }
           }
           changed = true
-          let callData: any = undefined
-          let kind: "chat" | "call" = m.kind ?? "chat"
-          if (hit.text && hit.text.startsWith('{"kind":"call"')) {
-            try {
-              const p = JSON.parse(hit.text)
-              if (p.kind === "call" && p.call) {
-                callData = p.call
-                kind = "call"
-              }
-            } catch {}
-          }
+          const roomEmoji = c.favEmoji || (c.theme && themeIcon(c)) || "👍"
+          const parsed = parseChatPayload(hit.text, roomEmoji)
           const fileData = mediaRefToFile(hit.text)
           const isVoice =
             fileData != null &&
@@ -566,15 +590,16 @@ export function useChatMessages({
           const duration = voiceDur ? parseInt(voiceDur[1], 10) : 0
           return {
             ...m,
-            text: isVoice ? "Đã gửi một tin nhắn thoại" : (fileData ? fileData.name : hit.text),
+            text: isVoice ? "Đã gửi một tin nhắn thoại" : (fileData ? fileData.name : parsed.text),
             voice: isVoice
               ? { url: m.voice?.url || "", duration: m.voice?.duration || duration }
               : m.voice,
             file: isVoice ? undefined : (fileData ?? m.file),
             decrypted: true,
             undecryptable: false,
-            kind,
-            call: callData,
+            kind: parsed.kind,
+            call: parsed.callData,
+            like: parsed.isLike ? true : m.like,
             status: (hit.status as any) ?? m.status,
           }
         })
@@ -625,25 +650,18 @@ export function useChatMessages({
   const insertOfflineMsg = (msg: PeerOfflineMsg) => {
     const roomId = msg.roomId
     const mine = meId > 0 && msg.senderId === meId
-    let kind: "chat" | "call" = "chat"
-    let callData: MessageCallData | undefined = undefined
-    if (msg.text && msg.text.startsWith('{"kind":"call"')) {
-      try {
-        const p = JSON.parse(msg.text)
-        if (p.kind === "call" && p.call) {
-          callData = p.call
-          kind = "call"
-        }
-      } catch {}
-    }
+    const conv = conversationsRef.current.find((c) => c.realId === roomId)
+    const roomEmoji = conv?.favEmoji || (conv?.theme && themeIcon(conv)) || "👍"
+    const parsed = parseChatPayload(msg.text, roomEmoji)
     const fileData = mediaRefToFile(msg.text)
     const nm: Message = {
       id: Date.now() + Math.random(),
       clientId: msg.clientMsgId,
-      text: fileData ? fileData.name : (msg.text ?? ""),
+      text: fileData ? fileData.name : parsed.text,
       file: fileData,
-      kind,
-      call: callData,
+      kind: parsed.kind,
+      call: parsed.callData,
+      like: parsed.isLike || undefined,
       fromMe: mine,
       time: formatClock(msg.sentAt ?? Date.now()),
       status: mine ? "sent" : "delivered",
@@ -661,8 +679,8 @@ export function useChatMessages({
       if (msg.clientMsgId && c.messages.some((m) => m.clientId === msg.clientMsgId)) {
         return prev
       }
-      const lastMsgText = callData
-        ? callLabel(callData.type, callData.dir, callData.duration, callData.outcome)
+      const lastMsgText = parsed.callData
+        ? callLabel(parsed.callData.type, parsed.callData.dir, parsed.callData.duration, parsed.callData.outcome)
         : nm.text
       const messages = [...c.messages, nm].sort(
         (a, b) => (a.sentAt ?? 0) - (b.sentAt ?? 0),
@@ -765,24 +783,16 @@ export function useChatMessages({
           if (m.text && !m.undecryptable && m.decrypted) return m
           if (h.text == null && m.text) return m
           changed = true
-          let callData: MessageCallData | undefined = undefined
-          let kind: "chat" | "call" = m.kind ?? "chat"
-          if (h.text && h.text.startsWith('{"kind":"call"')) {
-            try {
-              const p = JSON.parse(h.text)
-              if (p.kind === "call" && p.call) {
-                callData = p.call
-                kind = "call"
-              }
-            } catch {}
-          }
+          const roomEmoji = c.favEmoji || (c.theme && themeIcon(c)) || "👍"
+          const parsed = parseChatPayload(h.text, roomEmoji)
           return {
             ...m,
-            text: h.text ?? m.text ?? "",
+            text: h.text != null ? parsed.text : (m.text ?? ""),
             decrypted: h.text != null,
             undecryptable: h.text == null,
-            kind,
-            call: callData,
+            kind: parsed.kind,
+            call: parsed.callData,
+            like: parsed.isLike ? true : m.like,
           }
         })
         const extra: Message[] = msgs
@@ -844,24 +854,16 @@ export function useChatMessages({
                 file: isVoice ? undefined : fileObj,
               }
             }
-            let callData: MessageCallData | undefined = undefined
-            let kind: "chat" | "call" = "chat"
-            if (h.text && h.text.startsWith('{"kind":"call"')) {
-              try {
-                const p = JSON.parse(h.text)
-                if (p.kind === "call" && p.call) {
-                  callData = p.call
-                  kind = "call"
-                }
-              } catch {}
-            }
+            const roomEmoji = c.favEmoji || (c.theme && themeIcon(c)) || "👍"
+            const parsed = parseChatPayload(h.text, roomEmoji)
             return {
               id: Date.now() + Math.random(),
               clientId: h.clientMsgId,
-              text: h.text ?? "",
+              text: parsed.text,
               fromMe: h.direction === "out",
-              kind,
-              call: callData,
+              kind: parsed.kind,
+              call: parsed.callData,
+              like: parsed.isLike || undefined,
               time: formatClock(h.sentAt ?? Date.now()),
               status: h.direction === "out" ? "sent" : "delivered",
               sentAt: h.sentAt ?? Date.now(),
@@ -960,23 +962,16 @@ export function useChatMessages({
       })
       return
     }
-    let callData: MessageCallData | undefined = undefined
-    let kind: "chat" | "call" = "chat"
-    if (chat.text && chat.text.startsWith('{"kind":"call"')) {
-      try {
-        const p = JSON.parse(chat.text)
-        if (p.kind === "call" && p.call) {
-          callData = p.call
-          kind = "call"
-        }
-      } catch {}
-    }
+    const conv = conversationsRef.current.find((c) => c.realId === roomId)
+    const roomEmoji = conv?.favEmoji || (conv?.theme && themeIcon(conv)) || "👍"
+    const parsed = parseChatPayload(chat.text, roomEmoji)
     const nm: Message = mergePendingStatus(pendingStatusRef.current, roomId, {
       id: Date.now(),
       clientId: chat.clientId,
-      text: chat.text ?? "",
-      kind,
-      call: callData,
+      text: parsed.text,
+      kind: parsed.kind,
+      call: parsed.callData,
+      like: parsed.isLike || undefined,
       fromMe: mine,
       time: formatClock(chat.ts ?? Date.now()),
       status: mine ? "sent" : "delivered",
@@ -987,6 +982,7 @@ export function useChatMessages({
         ? makeInitials(chat.fromUsername, chat.fromUsername)
         : undefined,
       replyToClientId: chat.replyToClientId,
+      decrypted: true,
     })
     setConversations((prev) => {
       const idx = prev.findIndex((c) => c.realId === roomId)
@@ -1005,8 +1001,8 @@ export function useChatMessages({
         )
         if (found) nm.replyId = found.id
       }
-      const lastMsgText = callData
-        ? callLabel(callData.type, callData.dir, callData.duration, callData.outcome)
+      const lastMsgText = parsed.callData
+        ? callLabel(parsed.callData.type, parsed.callData.dir, parsed.callData.duration, parsed.callData.outcome)
         : nm.text
       const updated: typeof c = {
         ...c,
@@ -1549,22 +1545,37 @@ export function useChatMessages({
     if (!canSend()) return
     const time = now()
     const id = Date.now()
+    const clientId = genClientId()
+    const emojiText = selected.favEmoji ?? themeIcon(selected)
+    const replyTarget =
+      replyToId !== null
+        ? selected.messages.find((m) => m.id === replyToId)
+        : undefined
     const likeMsg: Message = {
       id,
-      text: selected.favEmoji ?? themeIcon(selected),
+      clientId,
+      text: emojiText,
       fromMe: true,
       time,
-      status: "sent",
+      status: selected.realId !== undefined ? "sending" : "sent",
       sentAt: Date.now(),
       like: true,
+      replyId: replyToId ?? undefined,
+      replyToClientId: replyTarget?.clientId,
+      decrypted: true,
     }
+    const optimistic = mergePendingStatus(
+      pendingStatusRef.current,
+      selected.realId,
+      likeMsg,
+    )
     setConversations((prev) =>
       prev.map((c) =>
         c.id === selectedId
           ? {
               ...c,
-              messages: [...c.messages, likeMsg],
-              lastMessage: likeMsg.text,
+              messages: [...c.messages, optimistic],
+              lastMessage: optimistic.text,
               time,
               lastAt: Date.now(),
               unread: 0,
@@ -1572,6 +1583,53 @@ export function useChatMessages({
           : c,
       ),
     )
+    if (replyToId !== null) cancelReply()
+    if (selected.realId !== undefined) {
+      const realId = selected.realId
+      if (!selected.online) {
+        if (peerState !== "on")
+          pushToast("Peer Core chưa bật — tin sẽ ở trạng thái chờ")
+        else if (e2eState !== "unlocked")
+          pushToast("Chưa mở khoá E2E — cần mở khoá để gửi tin ngoại tuyến")
+      }
+      api
+        .sendMessage(realId, {
+          client_msg_id: clientId,
+          text: "",
+          reply_to_client_id: replyTarget?.clientId,
+        })
+        .then((r) => {
+          if (!r.ok && peerState !== "on") {
+            patchRoomMsg(realId, clientId, (m) => ({ ...m, status: "failed" }))
+          }
+        })
+        .catch(() => {
+          if (peerState !== "on")
+            patchRoomMsg(realId, clientId, (m) => ({ ...m, status: "failed" }))
+        })
+      dbg("gửi like", realId, shortCid(clientId), peerState === "on" ? "mesh" : "no-peercore")
+      const payloadText = JSON.stringify({ kind: "like", emoji: emojiText })
+      if (peerState === "on" && peerRef.current) {
+        peerRef.current.send({
+          type: "send",
+          roomId: realId,
+          text: payloadText,
+          clientId,
+          replyToClientId: replyTarget?.clientId,
+        })
+      }
+      const safeRoomId = realId
+      const safeCid = clientId
+      const ackTimer = setTimeout(() => {
+        outgoingAcksRef.current.delete(safeCid)
+        patchRoomMsg(safeRoomId, safeCid, (m) =>
+          m.status === "sending"
+            ? { ...m, status: peerState === "on" ? "sent" : "failed", retryable: peerState !== "on" }
+            : m,
+        )
+      }, 5000)
+      outgoingAcksRef.current.set(safeCid, ackTimer)
+    }
   }
 
   const sendVoice = (url = recUrl, duration = recDuration) => {

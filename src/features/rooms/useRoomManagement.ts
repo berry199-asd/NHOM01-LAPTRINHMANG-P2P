@@ -211,7 +211,12 @@ export function useRoomManagement({
     const finalName = savedName || defaultName
     const finalAvatar = room.avatar || savedAvatar || undefined
     const finalTheme = savedTheme || room.theme_color || undefined
-    const finalEmoji = savedEmoji || room.default_reaction_emoji || "👍"
+    const finalEmoji = room.default_reaction_emoji || savedEmoji || "👍"
+    if (room.default_reaction_emoji) {
+      try {
+        localStorage.setItem(`room_emoji_${roomKey}`, room.default_reaction_emoji)
+      } catch {}
+    }
     const finalBg = room.background !== undefined ? (room.background || undefined) : (savedBg || undefined)
 
     return {
@@ -233,7 +238,9 @@ export function useRoomManagement({
       bg: finalBg,
       pinned: isPinned,
       muted: isMuted,
-      approval: savedApproval,
+      approval: room.settings ? room.settings.require_join_approval : savedApproval,
+      settings: room.settings,
+      pending_join_requests_count: room.pending_join_requests_count,
       nicknames: savedNicks,
     }
   }

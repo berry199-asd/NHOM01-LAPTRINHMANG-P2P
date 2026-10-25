@@ -44,6 +44,7 @@ export interface MessageInputProps {
   setEmojiTab: React.Dispatch<React.SetStateAction<"recent" | "all">>
   recentEmojis: string[]
   insertEmojiAtCursor: (e: string) => void
+  myMemberId?: number
 }
 
 export function MessageInput({
@@ -85,7 +86,15 @@ export function MessageInput({
   setEmojiTab,
   recentEmojis,
   insertEmojiAtCursor,
+  myMemberId,
 }: MessageInputProps) {
+  const myRole = selected.isGroup
+    ? (selected.members?.find((m) => m.id === myMemberId)?.role ?? "member")
+    : null
+  const isSendForbidden =
+    selected.isGroup &&
+    selected.settings?.allow_member_send === false &&
+    myRole === "member"
   return (
     <>
       {/* Typing indicator */}
@@ -322,10 +331,21 @@ export function MessageInput({
               onChange={handleImageInput}
             />
             <button
-              onClick={() => fileInputRef.current?.click()}
-              className="p-2 rounded-md transition-opacity hover:opacity-60 flex-shrink-0"
+              onClick={() => {
+                if (!isSendForbidden) fileInputRef.current?.click()
+              }}
+              disabled={isSendForbidden}
+              className={`p-2 rounded-md transition-opacity flex-shrink-0 ${
+                isSendForbidden
+                  ? "opacity-30 cursor-not-allowed"
+                  : "hover:opacity-60"
+              }`}
               style={{ color: "var(--muted)" }}
-              title="Gửi file"
+              title={
+                isSendForbidden
+                  ? "Chỉ trưởng/phó nhóm được gửi tin"
+                  : "Gửi file"
+              }
             >
               <svg
                 width="18"
@@ -341,10 +361,21 @@ export function MessageInput({
               </svg>
             </button>
             <button
-              onClick={() => imageInputRef.current?.click()}
-              className="p-2 rounded-md transition-opacity hover:opacity-60 flex-shrink-0"
+              onClick={() => {
+                if (!isSendForbidden) imageInputRef.current?.click()
+              }}
+              disabled={isSendForbidden}
+              className={`p-2 rounded-md transition-opacity flex-shrink-0 ${
+                isSendForbidden
+                  ? "opacity-30 cursor-not-allowed"
+                  : "hover:opacity-60"
+              }`}
               style={{ color: "var(--muted)" }}
-              title="Gửi ảnh/video"
+              title={
+                isSendForbidden
+                  ? "Chỉ trưởng/phó nhóm được gửi tin"
+                  : "Gửi ảnh/video"
+              }
             >
               <svg
                 width="18"
@@ -362,12 +393,22 @@ export function MessageInput({
               </svg>
             </button>
             <button
-              className="p-2 rounded-md transition-opacity hover:opacity-60 flex-shrink-0"
+              className={`p-2 rounded-md transition-opacity flex-shrink-0 ${
+                isSendForbidden
+                  ? "opacity-30 cursor-not-allowed"
+                  : "hover:opacity-60"
+              }`}
               style={{
                 color: "var(--muted)",
               }}
-              title="Ghi âm thoại"
+              title={
+                isSendForbidden
+                  ? "Chỉ trưởng/phó nhóm được gửi tin"
+                  : "Ghi âm thoại"
+              }
+              disabled={isSendForbidden}
               onClick={() => {
+                if (isSendForbidden) return
                 if (recState === "off") startRecording()
                 else if (recState === "preview") cancelPreview()
               }}
@@ -396,7 +437,7 @@ export function MessageInput({
                 const v = e.target.value
                 setMessageInput(v)
                 const roomId = selected.realId
-                if (roomId && v && peerOnRef.current) {
+                if (roomId && v && peerOnRef.current && !isSendForbidden) {
                   const nowMs = Date.now()
                   if (nowMs - lastTypingSentRef.current > 2000) {
                     lastTypingSentRef.current = nowMs
@@ -407,17 +448,21 @@ export function MessageInput({
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault()
-                  sendMessage()
+                  if (!isSendForbidden) {
+                    sendMessage()
+                  }
                 }
               }}
               placeholder={
-                !selected.isGroup && selected.blocked
-                  ? "Người dùng đã bị chặn"
-                  : !peerOnRef.current
-                    ? "Peer Core chưa kết nối..."
-                    : !peerReady
-                      ? "Chưa mở khoá E2E — mở khoá ở menu bên trái để gửi tin"
-                      : "Nhập tin nhắn..."
+                isSendForbidden
+                  ? "Chỉ trưởng/phó nhóm được gửi tin"
+                  : !selected.isGroup && selected.blocked
+                    ? "Người dùng đã bị chặn"
+                    : !peerOnRef.current
+                      ? "Peer Core chưa kết nối..."
+                      : !peerReady
+                        ? "Chưa mở khoá E2E — mở khoá ở menu bên trái để gửi tin"
+                        : "Nhập tin nhắn..."
               }
               className="flex-1 px-3 py-2 text-sm rounded-md outline-none"
               style={{
@@ -426,23 +471,35 @@ export function MessageInput({
                 color: "var(--text)",
               }}
               disabled={
-                (!selected.isGroup && !!selected.blocked) || !peerReady
+                isSendForbidden ||
+                (!selected.isGroup && !!selected.blocked) ||
+                !peerReady
               }
             />
             <div className="relative flex-shrink-0">
               <button
                 ref={emojiBtnRef}
                 onClick={() => {
+                  if (isSendForbidden) return
                   setEmojiOpen((v) => !v)
                   setEmojiQuery("")
                 }}
-                className="p-2 rounded-md transition-opacity hover:opacity-60"
+                disabled={isSendForbidden}
+                className={`p-2 rounded-md transition-opacity ${
+                  isSendForbidden
+                    ? "opacity-30 cursor-not-allowed"
+                    : "hover:opacity-60"
+                }`}
                 style={{
                   color: "var(--muted)",
                   fontSize: 18,
                   lineHeight: 1,
                 }}
-                title="Chèn biểu tượng cảm xúc"
+                title={
+                  isSendForbidden
+                    ? "Chỉ trưởng/phó nhóm được gửi tin"
+                    : "Chèn biểu tượng cảm xúc"
+                }
               >
                 😊
               </button>
@@ -576,15 +633,22 @@ export function MessageInput({
                 })()}
             </div>
             <button
-              onClick={
-                editingId !== null
-                  ? sendMessage
-                  : messageInput.trim()
-                    ? sendMessage
-                    : sendLike
+              onClick={() => {
+                if (isSendForbidden) return
+                if (editingId !== null || messageInput.trim()) {
+                  sendMessage()
+                } else {
+                  sendLike()
+                }
+              }}
+              disabled={
+                isSendForbidden || (!selected.isGroup && !!selected.blocked)
               }
-              disabled={!selected.isGroup && !!selected.blocked}
-              className="p-2 rounded-md flex-shrink-0 transition-opacity"
+              className={`p-2 rounded-md flex-shrink-0 transition-opacity ${
+                isSendForbidden
+                  ? "opacity-30 cursor-not-allowed"
+                  : "hover:opacity-85"
+              }`}
               style={{
                 color:
                   editingId !== null
@@ -592,16 +656,21 @@ export function MessageInput({
                     : messageInput.trim()
                       ? "var(--primary)"
                       : (selected.theme ?? "var(--primary)"),
-                opacity:
-                  editingId !== null || messageInput.trim() ? 1 : 0.85,
-                cursor: "pointer",
+                opacity: isSendForbidden
+                  ? 0.3
+                  : editingId !== null || messageInput.trim()
+                    ? 1
+                    : 0.85,
+                cursor: isSendForbidden ? "not-allowed" : "pointer",
               }}
               title={
-                editingId !== null
-                  ? "Lưu chỉnh sửa"
-                  : messageInput.trim()
-                    ? "Gửi"
-                    : "Thích"
+                isSendForbidden
+                  ? "Chỉ trưởng/phó nhóm được gửi tin"
+                  : editingId !== null
+                    ? "Lưu chỉnh sửa"
+                    : messageInput.trim()
+                      ? "Gửi"
+                      : "Thích"
               }
             >
               {editingId !== null ? (

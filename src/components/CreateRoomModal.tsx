@@ -12,6 +12,7 @@ export interface RoomMember {
   publicId?: string
   /** Ảnh đại diện (data-URI hoặc URL) nếu có; thiếu thì giao diện dùng chữ viết tắt. */
   avatar?: string
+  role?: "owner" | "admin" | "member" | "leader"
 }
 
 export const FRIENDS: RoomMember[] = []

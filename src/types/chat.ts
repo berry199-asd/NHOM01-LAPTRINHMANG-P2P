@@ -79,7 +79,7 @@ export interface Message {
   replyToClientId?: string
   voice?: { url: string; duration: number }
   seenBy?: { name: string; readAt: string }[]
-  kind?: "call" | "chat"
+  kind?: "call" | "chat" | "system"
   call?: {
     type: "voice" | "video"
     dir: "out" | "in"
@@ -128,6 +128,51 @@ export interface Conversation {
   bg?: string
   lastAt?: number
   unread?: number
+  settings?: RoomSettings
+  pending_join_requests_count?: number
+}
+
+export interface RoomSettings {
+  room_id?: number
+  allow_member_edit_info: boolean
+  allow_member_pin: boolean
+  allow_member_notes_reminders: boolean
+  allow_member_polls: boolean
+  allow_member_send: boolean
+  require_join_approval: boolean
+  highlight_admin_messages: boolean
+  new_member_read_recent: boolean
+  join_link_enabled: boolean
+  join_token?: string
+}
+
+export interface JoinRequest {
+  id: number
+  room_id: number
+  user_id: number
+  username: string
+  display_name: string
+  avatar: string
+  invited_by?: number
+  inviter_name?: string
+  via: "invite" | "link"
+  status: "pending" | "approved" | "rejected"
+  created_at: number
+  decided_by?: number
+  decided_at?: number
+}
+
+export interface RoomBlock {
+  id: number
+  room_id: number
+  user_id: number
+  username: string
+  display_name: string
+  avatar: string
+  blocked_by: number
+  blocker_name: string
+  reason?: string
+  blocked_at: number
 }
 
 export const EMPTY_CONVERSATION: Conversation = {

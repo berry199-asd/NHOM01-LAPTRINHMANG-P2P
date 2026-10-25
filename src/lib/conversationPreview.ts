@@ -154,6 +154,15 @@ export function previewLastMessage(
       : `${name} đã thu hồi một tin nhắn`
   }
   if (last.kind === "call") return callPreviewText(last.call)
+  if (last.text && last.text.startsWith('{"kind":"like"')) {
+    try {
+      const p = JSON.parse(last.text)
+      if (p.kind === "like" && p.emoji) {
+        const head = `${who}: ${p.emoji}`
+        return last.status === "sending" ? `${head} · ${SENDING_HINT}` : head
+      }
+    } catch {}
+  }
   if (last.voice) return `${who}: Đã gửi một tin nhắn thoại`
   if (last.file) {
     return `${who}: ${
