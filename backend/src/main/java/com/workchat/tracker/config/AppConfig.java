@@ -30,7 +30,7 @@ public record AppConfig(
     public AppConfig() {
         this(
                 intEnv("TRACKER_PORT", 9090),
-                env("DB_URL", "jdbc:mysql://127.0.0.1:3306/workchat?useSSL=false&serverTimezone=UTC&characterEncoding=UTF-8&connectionCollation=utf8mb4_unicode_ci&rewriteBatchedStatements=true"),
+                env("DB_URL", "jdbc:mysql://127.0.0.1:3306/workchat?useSSL=false&serverTimezone=Asia/Ho_Chi_Minh&characterEncoding=UTF-8&connectionCollation=utf8mb4_unicode_ci&rewriteBatchedStatements=true"),
                 env("DB_USER", "root"),
                 env("DB_PASSWORD", ""),
                 intEnv("DB_POOL_SIZE", 10),

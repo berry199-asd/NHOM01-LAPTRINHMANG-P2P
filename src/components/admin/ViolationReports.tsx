@@ -56,6 +56,8 @@ export function ViolationReports() {
 
   useEffect(() => {
     load()
+    const t = setInterval(load, 8000)
+    return () => clearInterval(t)
   }, [load])
 
   const filtered = useMemo(
@@ -103,9 +105,22 @@ export function ViolationReports() {
             {s === "all" ? "Tất cả" : STATUS_LABEL[s]}
           </button>
         ))}
-        <span className="text-xs ml-auto" style={{ color: "var(--muted)" }}>
-          {filtered.length}/{reports.length} báo cáo
-        </span>
+        <div className="flex items-center gap-2 ml-auto">
+          <span className="text-xs" style={{ color: "var(--muted)" }}>
+            {filtered.length}/{reports.length} báo cáo
+          </span>
+          <button
+            onClick={() => load()}
+            disabled={loading}
+            className="px-2.5 py-1 text-xs rounded border transition-opacity hover:opacity-70"
+            style={{
+              borderColor: "var(--border)",
+              color: "var(--muted)",
+            }}
+          >
+            {loading ? "Đang tải…" : "Làm mới"}
+          </button>
+        </div>
       </div>
 
       {error && (

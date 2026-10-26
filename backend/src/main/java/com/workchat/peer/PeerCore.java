@@ -613,7 +613,7 @@ public final class PeerCore {
             frame.put("userId", userId);
             frame.put("keyChanged", true);
             notifyUi(frame);
-            System.out.println("[peer] CẢNH BÁO TOFU: khóa định danh của user " + userId + " đã thay đổi");
+            System.out.println("[peer] CANH BAO TOFU: khoa dinh danh cua user " + userId + " da thay doi");
             return false;
         }
         return true;
@@ -728,7 +728,7 @@ public final class PeerCore {
         apiServer.createContext("/files", this::handleFileDownload);
         apiServer.createContext("/ping", ex -> reply(ex, 200, Json.write(Map.of("ok", true))));
         apiServer.start();
-        System.out.println("[peer] API cục bộ (chẩn đoán): http://127.0.0.1:" + apiPort
+        System.out.println("[peer] API cuc bo (chan doan): http://127.0.0.1:" + apiPort
                 + "/state  |  http://127.0.0.1:" + apiPort + "/links");
     }
 
@@ -2000,18 +2000,18 @@ public final class PeerCore {
         if (seq >= 0 && seq < acked.length) {
             acked[seq] = true;
         }
-        if (seq % 16 == 0) {
-            int done = 0;
-            for (boolean b : acked) {
-                if (b) {
-                    done++;
-                }
+        int done = 0;
+        for (boolean b : acked) {
+            if (b) {
+                done++;
             }
-            int pct = acked.length == 0 ? 100 : (int) (100L * done / acked.length);
-            if (pct / 10 > sf.loggedPct / 10) {
-                sf.loggedPct = pct;
-                fileDebug("progress", sf.fileId, Map.of("pct", pct, "route", "direct"));
-            }
+        }
+        int pct = acked.length == 0 ? 100 : (int) (100L * done / acked.length);
+        if (pct != sf.loggedPct) {
+            sf.loggedPct = pct;
+            fileDebug("progress", sf.fileId, Map.of("pct", pct, "route", "direct"));
+            notifyFileState(sf.roomId, sf.fileId, "sending", sf.accepted.size(), sf.sha256,
+                    false, sf.acked.size(), recipientStates(sf), pct);
         }
         sf.lastActivityAt = System.currentTimeMillis();
         sf.paused = false;
@@ -2182,11 +2182,16 @@ public final class PeerCore {
 
     /** Báo UI trạng thái của tệp ĐANG GỬI (không phải tệp nhận). */
     private void notifyFileState(long roomId, String fileId, String state, int sentTo, String sha) {
-        notifyFileState(roomId, fileId, state, sentTo, sha, false, 0, List.of());
+        notifyFileState(roomId, fileId, state, sentTo, sha, false, 0, List.of(), "sent".equals(state) ? 100 : -1);
     }
 
     private void notifyFileState(long roomId, String fileId, String state, int sentTo, String sha,
                                  boolean weak, int total, List<Map<String, Object>> recipients) {
+        notifyFileState(roomId, fileId, state, sentTo, sha, weak, total, recipients, "sent".equals(state) ? 100 : -1);
+    }
+
+    private void notifyFileState(long roomId, String fileId, String state, int sentTo, String sha,
+                                 boolean weak, int total, List<Map<String, Object>> recipients, int progress) {
         Map<String, Object> f = new HashMap<>();
         f.put("type", "file_state");
         f.put("roomId", roomId);
@@ -2197,6 +2202,9 @@ public final class PeerCore {
         f.put("weak", weak);
         f.put("recipients", recipients);
         f.put("sha256", sha == null ? "" : sha);
+        if (progress >= 0) {
+            f.put("progress", progress);
+        }
         notifyUi(f);
     }
 
@@ -2699,6 +2707,7 @@ public final class PeerCore {
                         }
                         saveFileState(sf.roomId, sf.fileId, "sent", "out");
                         notifyFileState(sf.roomId, sf.fileId, "sent", envs.size(), sf.sha256);
+                        markSent(cid);
                     } else {
                         notifyFileState(sf.roomId, sf.fileId, "sending", sf.accepted.size(), sf.sha256);
                     }
@@ -2751,6 +2760,8 @@ public final class PeerCore {
                         fileDebug("blob-put", sf.fileId, Map.of("block", i, "status", r.statusCode()));
                         return null;
                     }
+                    int pct = 8 + (int) ((90L * (i + 1)) / blocks);
+                    notifyFileState(sf.roomId, sf.fileId, "sending", 0, sf.sha256, false, 0, List.of(), pct);
                 }
             }
             HttpResponse<String> fr = postWithRetry(serverUrl + "/api/blob/" + blobId + "/finish", "{}");
@@ -3697,8 +3708,62 @@ public final class PeerCore {
         return sendChat(roomId, text, clientId, null);
     }
 
+    private record RoomPermCache(long cachedAt, boolean isDirect, boolean allowMemberSend, Map<Long, String> roles) {}
+    private final Map<Long, RoomPermCache> roomPermsCache = new ConcurrentHashMap<>();
+
+    public boolean isSenderAllowedInRoom(long roomId, long fromUserId) {
+        if (roomId <= 0 || fromUserId <= 0) {
+            return true;
+        }
+        long now = System.currentTimeMillis();
+        RoomPermCache cached = roomPermsCache.get(roomId);
+        if (cached == null || now - cached.cachedAt() > 30_000L || !cached.roles().containsKey(fromUserId)) {
+            try {
+                HttpResponse<String> r = getJson(serverUrl + "/api/rooms/" + roomId);
+                if (r.statusCode() == 200) {
+                    JsonNode root = Json.tree(r.body()).path("room");
+                    boolean isDirect = root.path("is_direct").asBoolean(false);
+                    boolean allowMemberSend = true;
+                    JsonNode sNode = root.path("settings");
+                    if (sNode.isObject() && sNode.has("allow_member_send")) {
+                        allowMemberSend = sNode.path("allow_member_send").asBoolean(true);
+                    }
+                    Map<Long, String> roles = new ConcurrentHashMap<>();
+                    for (JsonNode mb : root.path("members")) {
+                        long uid = mb.path("id").asLong();
+                        String role = mb.path("role").asText("member");
+                        if (uid > 0) {
+                            roles.put(uid, role);
+                        }
+                    }
+                    cached = new RoomPermCache(now, isDirect, allowMemberSend, roles);
+                    roomPermsCache.put(roomId, cached);
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        if (cached != null) {
+            if (cached.isDirect()) {
+                return true;
+            }
+            if (cached.allowMemberSend()) {
+                return true;
+            }
+            String role = cached.roles().getOrDefault(fromUserId, "member");
+            if ("owner".equalsIgnoreCase(role) || "admin".equalsIgnoreCase(role)) {
+                return true;
+            }
+            return false;
+        }
+        return true;
+    }
+
     public SendResult sendChat(long roomId, String text, String clientId, String replyToClientId) {
         Identity id = identity;
+        if (id != null && roomId > 0 && !isSenderAllowedInRoom(roomId, id.userId())) {
+            System.err.println("[peer-perm] Từ chối gửi tin vì phòng " + roomId + " cấm thành viên thường (allow_member_send=false)");
+            throw new IllegalStateException("forbidden_member_send");
+        }
         String cid = clientId != null ? clientId
                 : "P" + (id == null ? 0 : id.userId()) + "-" + UUID.randomUUID().toString().substring(0, 8);
         int n = 0;
@@ -3992,7 +4057,7 @@ public final class PeerCore {
             out.put("ts", ts);
         }
         notifyUi(out);
-        System.out.println("[peer-light] nhận Tracker type=" + type + " room=" + roomId);
+        System.out.println("[peer-light] nhan Tracker type=" + type + " room=" + roomId);
     }
 
     /** Log chẩn đoán đường gửi sự kiện nhẹ (KHÔNG chứa nội dung): loại, phòng, số peer nhận. */
@@ -4350,10 +4415,14 @@ public final class PeerCore {
             fn = str(m, "fromUsername");
         }
         if ("chat".equals(t)) {
+            long roomId = m.get("roomId") instanceof Number n ? n.longValue() : 0L;
+            if (roomId > 0 && !isSenderAllowedInRoom(roomId, from)) {
+                System.out.println("[peer-perm] Bỏ qua tin P2P từ user " + from + " trong phòng " + roomId + " do allow_member_send=false");
+                return;
+            }
             Map<String, Object> rec = new ConcurrentHashMap<>(m);
             rec.put("fromUserId", from);
             rec.put("fromUsername", fn);
-            long roomId = m.get("roomId") instanceof Number n ? n.longValue() : 0L;
             String cid = str(m, "clientId");
             String txt = str(m, "text");
             String replyTo = str(m, "replyToClientId");
@@ -5079,6 +5148,12 @@ public final class PeerCore {
             String contentType = isFile ? MediaRef.CONTENT_TYPE : "text";
             if (postStore(list.get(0).roomId(), cid, list.get(0).sentAt(), envs, type, contentType)) {
                 sent += list.size();
+                markSent(cid);
+                if (isFile) {
+                    String fileId = cid.startsWith("file:") ? cid.substring(5) : cid;
+                    saveFileState(list.get(0).roomId(), fileId, "sent", "out");
+                    notifyFileState(list.get(0).roomId(), fileId, "sent", envs.size(), null);
+                }
             }
         }
         return sent;
@@ -5472,10 +5547,17 @@ public final class PeerCore {
                     total++;
                     continue;
                 }
-                offlineStore.saveLocal(new OfflineStore.LocalMsg(
-                        (String) msg.get("clientMsgId"), ((Number) msg.get("roomId")).longValue(),
-                        ((Number) msg.get("senderId")).longValue(), (String) msg.get("contentType"),
-                        (String) msg.get("text"), ((Number) msg.get("sentAt")).longValue(), "in", "delivered"));
+                boolean isEdited = Boolean.TRUE.equals(msg.get("is_edited")) || "edit".equals(msg.get("contentType"));
+                String origCid = (String) msg.get("originalClientId");
+                String targetCid = (origCid != null && !origCid.isBlank()) ? origCid : (String) msg.get("clientMsgId");
+                if (isEdited && targetCid != null) {
+                    offlineStore.updateLocalText(targetCid, (String) msg.get("text"));
+                } else {
+                    offlineStore.saveLocal(new OfflineStore.LocalMsg(
+                            (String) msg.get("clientMsgId"), ((Number) msg.get("roomId")).longValue(),
+                            ((Number) msg.get("senderId")).longValue(), (String) msg.get("contentType"),
+                            (String) msg.get("text"), ((Number) msg.get("sentAt")).longValue(), "in", "delivered"));
+                }
                 notifyUi(frame);
                 total++;
             }
@@ -5525,6 +5607,9 @@ public final class PeerCore {
                 return null;
             }
             String text = new String(d.data(), StandardCharsets.UTF_8);
+            boolean isEdited = m.path("is_edited").asBoolean(false) || "edit".equals(contentType);
+            long editedAt = m.path("edited_at").asLong(0L);
+            String originalClientId = m.path("original_client_id").asText("");
             Map<String, Object> msg = new LinkedHashMap<>();
             msg.put("clientMsgId", clientMsgId);
             msg.put("roomId", roomId);
@@ -5533,6 +5618,13 @@ public final class PeerCore {
             msg.put("text", text);
             msg.put("sentAt", sentAt);
             msg.put("offline", true);
+            msg.put("is_edited", isEdited);
+            if (editedAt > 0) {
+                msg.put("edited_at", editedAt);
+            }
+            if (!originalClientId.isBlank()) {
+                msg.put("originalClientId", originalClientId);
+            }
             Map<String, Object> frame = new LinkedHashMap<>();
             frame.put("type", "offline_message");
             frame.put("serverId", serverId);

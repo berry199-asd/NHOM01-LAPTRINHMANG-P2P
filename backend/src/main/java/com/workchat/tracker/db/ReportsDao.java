@@ -23,6 +23,52 @@ public final class ReportsDao {
 
     public ReportsDao(DataSource ds) {
         this.ds = ds;
+        ensureTable();
+    }
+
+    private void ensureTable() {
+        String sql = "CREATE TABLE IF NOT EXISTS reports (" +
+                "  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT," +
+                "  reporter_id BIGINT UNSIGNED NOT NULL," +
+                "  target_type ENUM('user','room','message') NOT NULL," +
+                "  target_id VARCHAR(64) NOT NULL," +
+                "  reason VARCHAR(255) NOT NULL," +
+                "  evidence_note TEXT NULL," +
+                "  status ENUM('pending','resolved','dismissed') NOT NULL DEFAULT 'pending'," +
+                "  handled_by BIGINT UNSIGNED NULL," +
+                "  handled_at DATETIME NULL," +
+                "  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP," +
+                "  PRIMARY KEY (id)," +
+                "  KEY idx_rpt_status (status, created_at)," +
+                "  KEY idx_rpt_target (target_type, target_id)" +
+                ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;";
+        try (Connection c = ds.getConnection();
+             PreparedStatement p = c.prepareStatement(sql)) {
+            p.execute();
+        } catch (Exception e) {
+            System.err.println("[tracker-reports] Khởi tạo bảng reports: " + e.getMessage());
+        }
+    }
+
+    /** Tạo báo cáo vi phạm mới từ người dùng. Trả về ID vừa tạo. */
+    public long create(long reporterId, String targetType, String targetId, String reason, String evidenceNote) throws SQLException {
+        String sql = "INSERT INTO reports (reporter_id, target_type, target_id, reason, evidence_note, status, created_at) " +
+                "VALUES (?, ?, ?, ?, ?, 'pending', NOW())";
+        try (Connection c = ds.getConnection();
+             PreparedStatement p = c.prepareStatement(sql, PreparedStatement.RETURN_GENERATED_KEYS)) {
+            p.setLong(1, reporterId);
+            p.setString(2, targetType);
+            p.setString(3, targetId);
+            p.setString(4, (reason != null && !reason.isBlank()) ? reason.trim() : "Báo cáo vi phạm");
+            p.setString(5, (evidenceNote != null && !evidenceNote.isBlank()) ? evidenceNote.trim() : null);
+            p.executeUpdate();
+            try (ResultSet rs = p.getGeneratedKeys()) {
+                if (rs.next()) {
+                    return rs.getLong(1);
+                }
+            }
+        }
+        return 0L;
     }
 
     /** Danh sách báo cáo (lọc theo status; null/"all" = mọi trạng thái). */

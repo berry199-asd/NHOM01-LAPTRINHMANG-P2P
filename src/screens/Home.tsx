@@ -21,6 +21,7 @@ import { useChatMessages } from "../features/chat/useChatMessages"
 import {
   type Conversation,
   EMPTY_CONVERSATION,
+  ROOM_ID_OFFSET,
 } from "../types/chat"
 import { CreateRoomModal } from "../components/CreateRoomModal"
 import { BlockSharedModal } from "../features/chat/modals/BlockSharedModal"
@@ -36,6 +37,7 @@ import { themeIcon } from "../features/chat/emojiData"
 import {
   putPeople,
 } from "../lib/personDirectory"
+import { ongoingCallForRoom } from "../lib/groupCallPresence"
 import {
   api,
   type ApiRoom,
@@ -508,7 +510,17 @@ export function Home({ darkMode, onToggleDark, onLogout, inviteTarget, onInviteC
     callBusy,
     callDur,
     startCall,
+    ongoingGroupCalls,
+    joinGroupCall,
   } = callManager
+
+  // Cuộc gọi nhóm đang diễn ra ở phòng đang mở (do người khác/vừa rời phát `presence`).
+  const selectedRoomIdForCall =
+    selected.realId ??
+    (selected.id >= ROOM_ID_OFFSET ? selected.id - ROOM_ID_OFFSET : selected.id)
+  const ongoingGroupCallForSelected = selected.isGroup
+    ? ongoingCallForRoom(ongoingGroupCalls, selectedRoomIdForCall, Date.now())
+    : null
 
   const {
     searchOpen,
@@ -538,6 +550,16 @@ export function Home({ darkMode, onToggleDark, onLogout, inviteTarget, onInviteC
   const visibleMessages = selected.messages.filter(
     (m) => m.decrypted !== false || m.undecryptable,
   )
+
+  // Tự động đồng bộ lịch sử và trạng thái file/tin nhắn chờ khi mạng hồi phục
+  useEffect(() => {
+    if (netState.connected) {
+      const rid = selectedRoomIdRef.current
+      if (rid) {
+        chatMessages.pullLocalHistory(rid, undefined, 30)
+      }
+    }
+  }, [netState.connected])
 
   useEffect(() => {
     if (
@@ -1165,8 +1187,32 @@ export function Home({ darkMode, onToggleDark, onLogout, inviteTarget, onInviteC
     api.updateProfile({ phone_public: nv }).catch(() => {})
   }
 
-  const reportConversation = () => {
-    pushToast(`Đã gửi báo cáo về ${selected.name}`)
+  const reportConversation = async (evidenceNote?: string) => {
+    const isGroup = !!selected.isGroup
+    const targetType: "room" | "user" = isGroup ? "room" : "user"
+    let targetId = ""
+    if (isGroup) {
+      targetId = String(selected.realId ?? (selected.id >= ROOM_ID_OFFSET ? selected.id - ROOM_ID_OFFSET : selected.id))
+    } else {
+      const otherMember = (selected.members ?? []).find((m) => m.id && m.id !== meId)
+      targetId = otherMember?.id ? String(otherMember.id) : (selected.realId ? String(selected.realId) : (selected.name || "unknown"))
+    }
+    const reason = isGroup ? `Báo cáo nhóm "${selected.name}"` : `Báo cáo người dùng "${selected.name}"`
+    try {
+      const res = await api.createReport({
+        target_type: targetType,
+        target_id: targetId,
+        reason,
+        evidence_note: evidenceNote || undefined,
+      })
+      if (res.ok) {
+        pushToast(`Đã gửi báo cáo về ${selected.name} tới Quản trị viên`)
+      } else {
+        pushToast(`Không thể gửi báo cáo: ${res.error || "Lỗi máy chủ"}`)
+      }
+    } catch {
+      pushToast(`Lỗi kết nối khi gửi báo cáo`)
+    }
   }
 
   const peerNotice =
@@ -1425,6 +1471,12 @@ export function Home({ darkMode, onToggleDark, onLogout, inviteTarget, onInviteC
               openOtherProfile={openOtherProfile}
               startCall={(k) => void startCall(k, selected)}
               callBusy={callBusy}
+              ongoingGroupCall={ongoingGroupCallForSelected}
+              onJoinOngoing={() => {
+                if (ongoingGroupCallForSelected) {
+                  void joinGroupCall(ongoingGroupCallForSelected)
+                }
+              }}
               roomInfoOpen={roomInfoOpen}
               setRoomInfoOpen={setRoomInfoOpen}
             />
@@ -1475,6 +1527,12 @@ export function Home({ darkMode, onToggleDark, onLogout, inviteTarget, onInviteC
               call={call}
               callDur={callDur}
               startCall={startCall}
+              ongoingGroupCall={ongoingGroupCallForSelected}
+              onJoinOngoing={() => {
+                if (ongoingGroupCallForSelected) {
+                  void joinGroupCall(ongoingGroupCallForSelected)
+                }
+              }}
               showJump={showJump}
               jumpToBottom={jumpToBottom}
               onDownloadFile={(msg) => {

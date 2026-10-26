@@ -679,12 +679,30 @@ export function useChatMessages({
       senderInitials: msg.senderUsername
         ? makeInitials(msg.senderUsername, msg.senderUsername)
         : undefined,
+      edited: msg.is_edited || msg.contentType === "edit" ? true : undefined,
     }
     setConversations((prev) => {
       const idx = prev.findIndex((c) => c.realId === roomId)
       if (idx < 0) return prev
       const c = prev[idx]
-      if (msg.clientMsgId && c.messages.some((m) => m.clientId === msg.clientMsgId)) {
+      const targetCid = msg.originalClientId || msg.clientMsgId
+      if (targetCid && c.messages.some((m) => m.clientId === targetCid)) {
+        if (msg.is_edited || msg.contentType === "edit") {
+          const messages = c.messages.map((m) =>
+            m.clientId === targetCid ? { ...m, text: parsed.text, edited: true } : m
+          )
+          const lastMsgText = parsed.callData
+            ? callLabel(parsed.callData.type, parsed.callData.dir, parsed.callData.duration, parsed.callData.outcome)
+            : parsed.text
+          const updated: typeof c = {
+            ...c,
+            messages,
+            lastMessage: c.messages[c.messages.length - 1]?.clientId === targetCid ? lastMsgText : c.lastMessage,
+          }
+          const list = [...prev]
+          list[idx] = updated
+          return list
+        }
         return prev
       }
       const lastMsgText = parsed.callData
@@ -712,8 +730,11 @@ export function useChatMessages({
   }
 
   const handlePeerOffline = (msg: PeerOfflineMsg) => {
-    if (msg.clientMsgId && seenPeerIds.current.has(msg.clientMsgId)) return
-    if (msg.clientMsgId) seenPeerIds.current.add(msg.clientMsgId)
+    const isEdit = !!(msg.is_edited || msg.contentType === "edit" || msg.originalClientId)
+    if (!isEdit) {
+      if (msg.clientMsgId && seenPeerIds.current.has(msg.clientMsgId)) return
+      if (msg.clientMsgId) seenPeerIds.current.add(msg.clientMsgId)
+    }
     if (!conversationsRef.current.some((c) => c.realId === msg.roomId)) {
       pendingOfflineRef.current.push(msg)
       void refreshRooms().then(() => {
@@ -1035,7 +1056,19 @@ export function useChatMessages({
       prev.map((c) => ({
         ...c,
         messages: c.messages.map((m) =>
-          m.id === id && m.file ? { ...m, file: { ...m.file, ...patch } } : m,
+          m.id === id && m.file
+            ? {
+                ...m,
+                file: {
+                  ...m.file,
+                  ...patch,
+                  progress:
+                    typeof patch.progress === "number"
+                      ? Math.max(m.file.progress, patch.progress)
+                      : m.file.progress,
+                },
+              }
+            : m,
         ),
       })),
     )
@@ -1045,7 +1078,7 @@ export function useChatMessages({
     if (res.ok) {
       // "Đã gửi" chỉ khi bên nhận xác nhận (frame `file_state`), trước đó là đang gửi/chờ.
       patchMessageFile(id, {
-        progress: 100,
+        progress: 8,
         done: false,
         state: res.sentTo === 0 ? "waiting" : "sending",
         chunks: res.chunks,
@@ -1115,7 +1148,8 @@ export function useChatMessages({
       xhr.responseType = "json"
       xhr.upload.onprogress = (e) => {
         if (e.lengthComputable && onProgress) {
-          onProgress(Math.max(1, Math.round((e.loaded / e.total) * 100)))
+          // Giai đoạn nạp buffer local (chỉ hiển thị khởi động 0-8%, tránh nhảy 100% sớm)
+          onProgress(Math.min(8, Math.max(1, Math.round((e.loaded / e.total) * 8))))
         }
       }
       xhr.onload = () => {
@@ -1405,6 +1439,7 @@ export function useChatMessages({
             file: {
               ...m.file,
               state: "sending" as const,
+              progress: typeof f.progress === "number" ? f.progress : m.file.progress,
               weak: Boolean(f.weak),
               sentTo: typeof f.sentTo === "number" ? f.sentTo : m.file.sentTo,
               total: typeof f.total === "number" ? f.total : m.file.total,

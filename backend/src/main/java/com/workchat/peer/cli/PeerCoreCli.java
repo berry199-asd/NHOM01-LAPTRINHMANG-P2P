@@ -37,7 +37,7 @@ public final class PeerCoreCli {
         String server = serverArg != null && !serverArg.isBlank() ? serverArg.trim()
                 : envDefault("PEER_SERVER_URL", "http://127.0.0.1:9090");
         String serverSource = serverArg != null && !serverArg.isBlank() ? "--server"
-                : (serverEnv != null && !serverEnv.isBlank() ? "PEER_SERVER_URL" : "mặc định");
+                : (serverEnv != null && !serverEnv.isBlank() ? "PEER_SERVER_URL" : "mac dinh");
         String listenIp = arg(args, "--ip", envDefault("PEER_LISTEN_IP", "127.0.0.1"));
         String tokenArg = arg(args, "--token", env("PEER_TOKEN"));
         String listenPortRaw = arg(args, "--port", env("PEER_LISTEN_PORT"));
@@ -85,7 +85,7 @@ public final class PeerCoreCli {
 
         Runtime.getRuntime().addShutdownHook(new Thread(binder::shutdown, "peer-shutdown"));
 
-        System.out.println("[peer] UNBOUND — chờ trình duyệt bind trên 127.0.0.1:" + uiPort + "/ui"
+        System.out.println("[peer] UNBOUND - cho trinh duyet bind tren 127.0.0.1:" + uiPort + "/ui"
                 + " | mesh=" + listenIp + ":" + listenPort + " api=http://127.0.0.1:" + apiPort
                 + " signaling=" + wsUrl);
         Thread.currentThread().join();
@@ -119,7 +119,7 @@ public final class PeerCoreCli {
         try {
             registration.registerOrThrow();
         } catch (Exception e) {
-            System.err.println("Đăng ký peer thất bại: " + e.getMessage());
+            System.err.println("Dang ky peer that bai: " + e.getMessage());
             System.exit(2);
         }
 
@@ -156,11 +156,11 @@ public final class PeerCoreCli {
     private static void applyDebugFlags(PeerCore core, String relayOnlyRaw, String directOnlyRaw) {
         if (truthy(relayOnlyRaw)) {
             core.setRelayOnly(true);
-            System.out.println("[peer] chế độ force-relay: bỏ qua kênh trực tiếp");
+            System.out.println("[peer] che do force-relay: bo qua kenh truc tiep");
         }
         if (truthy(directOnlyRaw)) {
             core.setForceDirectOnly(true);
-            System.out.println("[peer] chế độ force-direct-only: không dùng Relay");
+            System.out.println("[peer] che do force-direct-only: khong dung Relay");
         }
     }
 
@@ -183,7 +183,7 @@ public final class PeerCoreCli {
 
             @Override
             public void onFailed(String reason) {
-                System.out.println("[peer] NAT mở cổng tự động không khả dụng: " + reason);
+                System.out.println("[peer] NAT mo cong tu dong khong kha dung: " + reason);
             }
         });
     }
@@ -193,15 +193,15 @@ public final class PeerCoreCli {
      * Cảnh báo nếu khác máy chủ mà web đang gọi (VITE_API_URL) — thường là nguyên nhân tin kẹt "Đang chờ".
      */
     private static void announceServer(String server, String source) {
-        System.out.println("[peer] Tracker: " + server + " (nguồn: " + source + ")");
+        System.out.println("[peer] Tracker: " + server + " (nguon: " + source + ")");
         String webUrl = env("VITE_API_URL");
         if (webUrl != null && !webUrl.isBlank()) {
             String a = authority(server);
             String b = authority(webUrl);
             if (!a.isEmpty() && !b.isEmpty() && !a.equalsIgnoreCase(b)) {
-                System.out.println("[peer] CẢNH BÁO: VITE_API_URL=" + webUrl + " (" + b
-                        + ") khác Tracker (" + a + ") — web và Peer Core đang trỏ tới 2 máy chủ khác nhau;"
-                        + " hãy đặt PEER_SERVER_URL cho khớp để tin nhắn không kẹt \"Đang chờ\".");
+                System.out.println("[peer] CANH BAO: VITE_API_URL=" + webUrl + " (" + b
+                        + ") khac Tracker (" + a + ") - web va Peer Core dang tro toi 2 may chu khac nhau;"
+                        + " hay dat PEER_SERVER_URL cho khop de tin nhan khong ket \"Dang cho\".");
             }
         }
     }

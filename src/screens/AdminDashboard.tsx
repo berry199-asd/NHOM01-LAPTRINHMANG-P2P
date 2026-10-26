@@ -1,4 +1,5 @@
-import { useState } from "react"
+import { useState, useEffect } from "react"
+import { api } from "../lib/api"
 import { Overview } from "../components/admin/Overview"
 import { Accounts } from "../components/admin/Accounts"
 import { OnlineMonitor } from "../components/admin/OnlineMonitor"
@@ -45,8 +46,27 @@ function makeInitials(user: ApiUser | null): string {
 
 export function AdminDashboard({ adminUser, onLogout }: Props) {
   const [section, setSection] = useState<Section>("overview")
+  const [pendingReportsCount, setPendingReportsCount] = useState<number>(0)
   const adminName = adminUser?.display_name?.trim() || adminUser?.email?.split("@")[0] || "Admin"
   const adminEmail = adminUser?.email ?? ""
+
+  useEffect(() => {
+    let cancelled = false
+    const checkReports = async () => {
+      try {
+        const r = await api.adminOverview()
+        if (!cancelled && r.ok && r.data) {
+          setPendingReportsCount(r.data.pending_reports ?? 0)
+        }
+      } catch {}
+    }
+    checkReports()
+    const t = setInterval(checkReports, 8000)
+    return () => {
+      cancelled = true
+      clearInterval(t)
+    }
+  }, [])
 
   return (
     <div className="flex min-h-screen" style={{ backgroundColor: "var(--bg)" }}>
@@ -86,7 +106,7 @@ export function AdminDashboard({ adminUser, onLogout }: Props) {
             <button
               key={item.key}
               onClick={() => setSection(item.key)}
-              className="w-full text-left px-4 py-2.5 text-sm transition-opacity hover:opacity-80"
+              className="w-full text-left px-4 py-2.5 text-sm transition-opacity hover:opacity-80 flex items-center justify-between"
               style={{
                 color: section === item.key ? "var(--text)" : "var(--muted)",
                 backgroundColor:
@@ -97,7 +117,18 @@ export function AdminDashboard({ adminUser, onLogout }: Props) {
                     : "2px solid transparent",
               }}
             >
-              {item.label}
+              <span>{item.label}</span>
+              {item.key === "reports" && pendingReportsCount > 0 && (
+                <span
+                  className="px-2 py-0.5 text-[11px] font-bold rounded-full leading-none"
+                  style={{
+                    backgroundColor: "var(--error, #ef4444)",
+                    color: "#fff",
+                  }}
+                >
+                  {pendingReportsCount}
+                </span>
+              )}
             </button>
           ))}
         </nav>

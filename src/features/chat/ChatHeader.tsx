@@ -3,6 +3,7 @@ import { Avatar } from "../../components/Avatar"
 import { AvatarStack } from "../../components/AvatarStack"
 import { presenceColor, presenceText } from "../../lib/presenceLabel"
 import type { CallKind } from "../../lib/peer"
+import type { OngoingGroupCall } from "../../lib/groupCallPresence"
 import type { Conversation } from "../../types/chat"
 
 export interface ChatHeaderProps {
@@ -28,6 +29,8 @@ export interface ChatHeaderProps {
   }) => void
   startCall: (kind: CallKind) => void
   callBusy: boolean
+  ongoingGroupCall?: OngoingGroupCall | null
+  onJoinOngoing?: () => void
   roomInfoOpen: boolean
   setRoomInfoOpen: React.Dispatch<React.SetStateAction<boolean>>
 }
@@ -50,6 +53,8 @@ export function ChatHeader({
   openOtherProfile,
   startCall,
   callBusy,
+  ongoingGroupCall = null,
+  onJoinOngoing,
   roomInfoOpen,
   setRoomInfoOpen,
 }: ChatHeaderProps) {
@@ -298,6 +303,17 @@ export function ChatHeader({
             <line x1="21" y1="21" x2="16.65" y2="16.65" />
           </svg>
         </button>
+        {ongoingGroupCall && !callBusy && onJoinOngoing && (
+          <button
+            onClick={onJoinOngoing}
+            className="flex items-center gap-1.5 px-3 py-1 mr-1 rounded-full text-xs font-semibold text-white shadow-sm transition-transform hover:scale-105 active:scale-95 cursor-pointer"
+            style={{ backgroundColor: "#22c55e" }}
+            title="Tham gia cuộc gọi nhóm đang diễn ra"
+          >
+            <span className="w-2 h-2 rounded-full bg-white animate-pulse" />
+            <span>Tham gia ({ongoingGroupCall.participantIds.length})</span>
+          </button>
+        )}
         <button
           onClick={() => void startCall("voice")}
           disabled={callBusy}

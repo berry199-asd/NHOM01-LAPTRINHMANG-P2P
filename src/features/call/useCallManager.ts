@@ -6,10 +6,17 @@ import {
 } from "../../lib/webrtc"
 import type { PeerClient, PeerUiFrame, CallKind } from "../../lib/peer"
 import {
+  startIncomingRingtone,
+  startOutgoingRingback,
+  stopAllRingtones,
+} from "../../lib/ringtone"
+import {
   canStartCall,
   decideOnInvite,
   callErrorReason,
   callStateAction,
+  shouldMarkAnsweredByPeer,
+  shouldTimeoutUnansweredGroupMember,
   type CallLocalPhase,
   type LocalCallView,
 } from "../../lib/callGuard"
@@ -27,6 +34,14 @@ import {
   putPerson,
   nameOf,
 } from "../../lib/personDirectory"
+import {
+  applyGroupCallPresence,
+  ongoingCallForRoom,
+  pruneExpiredGroupCalls,
+  GROUP_CALL_PRESENCE_INTERVAL_MS,
+  GROUP_CALL_PRESENCE_TTL_MS,
+  type OngoingGroupCall,
+} from "../../lib/groupCallPresence"
 import {
   type Conversation,
   type Message,
@@ -120,6 +135,14 @@ export function useCallManager({
   const [callMinimized, setCallMinimized] = useState(false)
   const [callNetQuality, setCallNetQuality] = useState<"good" | "weak" | "down">("good")
 
+  /**
+   * Cuộc gọi NHÓM đang diễn ra do người khác (hoặc chính ta vừa rời) phát `presence`.
+   * Key = roomId. Dùng để hiện thẻ "Tham gia" cho người chưa vào / vừa rời.
+   */
+  const [ongoingGroupCalls, setOngoingGroupCalls] = useState<
+    Record<number, OngoingGroupCall>
+  >({})
+
   // Lắng nghe trạng thái mạng của trình duyệt trong cuộc gọi
   useEffect(() => {
     const handleOnline = () => {
@@ -188,6 +211,17 @@ export function useCallManager({
   })
   const callSessionRef = useRef<CallSession | null>(null)
   const callStateRef = useRef<ActiveCallState | null>(null)
+  const ongoingCallTimersRef = useRef(new Map<number, number>())
+  // Dọn timer hết hạn presence khi component unmount.
+  useEffect(
+    () => () => {
+      for (const t of ongoingCallTimersRef.current.values()) {
+        window.clearTimeout(t)
+      }
+      ongoingCallTimersRef.current.clear()
+    },
+    [],
+  )
   const fallbackConversationsRef = useRef(conversations)
   useEffect(() => {
     fallbackConversationsRef.current = conversations
@@ -197,6 +231,30 @@ export function useCallManager({
   useEffect(() => {
     callStateRef.current = call
   }, [call])
+
+  // Phát nhạc chuông cuộc gọi đến / âm báo cuộc gọi đi
+  useEffect(() => {
+    const c = call
+    if (!c || c.state === "ended" || c.state === "failed") {
+      stopAllRingtones()
+      return
+    }
+
+    if (c.state === "calling") {
+      if (c.dir === "in") {
+        startIncomingRingtone()
+      } else if (c.dir === "out") {
+        startOutgoingRingback()
+      }
+    } else {
+      // Khi đã bắt máy (connecting, in-call) hoặc trạng thái khác:
+      stopAllRingtones()
+    }
+
+    return () => {
+      stopAllRingtones()
+    }
+  }, [call?.state, call?.dir, call?.callId])
 
   const clearCallTimers = () => {
     callRef.current.timers.forEach((t) => window.clearTimeout(t))
@@ -294,6 +352,7 @@ export function useCallManager({
       | "unreachable"
       | "busy",
   ) => {
+    stopAllRingtones()
     clearCallTimers()
     setCallNetQuality("good")
     const s = callSessionRef.current
@@ -328,6 +387,38 @@ export function useCallManager({
       activeConversationsRef.current.find(matchesTarget) ||
       conversations.find(matchesTarget)
     const realId = conv?.realId ?? c.roomId
+    // Cuộc gọi nhóm vừa kết thúc ở máy này: nếu vẫn còn >= 2 người khác đang trong cuộc gọi,
+    // giữ ngay thẻ "Tham gia" cho người vừa rời mà không cần chờ nhịp presence tiếp theo.
+    if (c.isGroup && realId !== undefined) {
+      const myCurrentId = meIdRef?.current ?? meId
+      const remainingIds = (c.participants ?? [])
+        .map((p) => p.userId)
+        .filter((id) => Number.isInteger(id) && id > 0 && id !== myCurrentId)
+      if (remainingIds.length >= 2) {
+        setOngoingGroupCalls((prev) => {
+          const entry: OngoingGroupCall = {
+            callId: c.callId,
+            roomId: realId,
+            convId: conv?.id,
+            callerId: c.callerId ?? c.peerId,
+            kind: c.kind,
+            startedAt: c.startAt ?? c.dialedAt ?? Date.now(),
+            name: conv?.name || "Cuộc gọi nhóm",
+            avatar: conv?.avatar,
+            participantIds: remainingIds,
+            expiresAt: Date.now() + GROUP_CALL_PRESENCE_TTL_MS,
+          }
+          return { ...prev, [realId]: entry }
+        })
+      } else {
+        setOngoingGroupCalls((prev) => {
+          if (!(realId in prev)) return prev
+          const next = { ...prev }
+          delete next[realId]
+          return next
+        })
+      }
+    }
     const members = conv?.members ?? []
     const participants = members.length || (c.participants?.length ?? 0) + 1
     const groupIds = conv?.isGroup
@@ -461,11 +552,19 @@ export function useCallManager({
       closeCallSession()
       return
     }
-    let outcome: "completed" | "missed" | "rejected" | "cancelled" | "busy" =
-      "completed"
+    let outcome:
+      | "completed"
+      | "missed"
+      | "rejected"
+      | "cancelled"
+      | "busy"
+      | "no-answer" = "completed"
     if (reason && (reason.includes("Không có ai trả lời") || reason.includes("timeout"))) {
       pushToast("Không có ai trả lời. Cuộc gọi đã kết thúc.")
       outcome = "no-answer"
+    } else if (reason && reason.includes("không còn ai khác")) {
+      // Tự động kết thúc khi chỉ còn một người (quy tắc gọi nhóm cần ≥ 2 người).
+      pushToast("Cuộc gọi đã kết thúc vì chỉ còn một người")
     } else if (c.state === "calling" || c.state === "connecting") {
       if (c.dir === "out") {
         if (
@@ -560,6 +659,130 @@ export function useCallManager({
     }
   }
 
+  /** Tìm hội thoại theo roomId thật (khớp cả id đã cộng ROOM_ID_OFFSET). */
+  const findConvByRoom = (roomId: number) =>
+    activeConversationsRef.current.find(
+      (cv) =>
+        cv.realId === roomId ||
+        cv.id === roomId ||
+        (cv.id >= ROOM_ID_OFFSET && cv.id - ROOM_ID_OFFSET === roomId),
+    )
+
+  /**
+   * Ghi nhận nhịp `presence` của một cuộc gọi nhóm đang diễn ra.
+   *
+   * Chỉ lưu khi ta KHÔNG ở trong chính cuộc gọi đó; bản ghi tự hết hạn nếu không còn ai
+   * phát nhịp (mọi người đã thoát). Nhờ vậy người vừa rời vẫn thấy nút "Tham gia".
+   */
+  const handleCallPresence = (f: PeerUiFrame) => {
+    const roomId = Number(f.roomId)
+    if (!roomId || !f.callId) return
+    const local = callStateRef.current
+    if (
+      local &&
+      local.callId === f.callId &&
+      local.state !== "ended" &&
+      local.state !== "failed"
+    ) {
+      return
+    }
+    const conv = findConvByRoom(roomId)
+    // Chỉ áp dụng cho phòng NHÓM — cuộc gọi 1-1 giữ nguyên hành vi cũ.
+    if (conv && !conv.isGroup) return
+    const now = Date.now()
+    setOngoingGroupCalls((prev) => applyGroupCallPresence(prev, f, conv, now))
+    const oldTimer = ongoingCallTimersRef.current.get(roomId)
+    if (oldTimer) window.clearTimeout(oldTimer)
+    const timer = window.setTimeout(() => {
+      ongoingCallTimersRef.current.delete(roomId)
+      setOngoingGroupCalls((prev) => pruneExpiredGroupCalls(prev, Date.now()))
+    }, GROUP_CALL_PRESENCE_TTL_MS + 1000)
+    ongoingCallTimersRef.current.set(roomId, timer)
+  }
+
+  /** Phát nhịp `presence` khi ta đang THẬT SỰ trong cuộc gọi nhóm (≥ 2 người). */
+  const broadcastGroupPresence = () => {
+    const c = callStateRef.current
+    if (
+      !c ||
+      c.state !== "in-call" ||
+      !c.isGroup ||
+      !c.callId ||
+      c.roomId === undefined
+    ) {
+      return
+    }
+    const ids = [
+      meIdRef?.current ?? meId,
+      ...(c.participants ?? []).map((p) => p.userId),
+    ].filter((id) => Number.isInteger(id) && id > 0)
+    const participants = [...new Set(ids)]
+    if (participants.length < 2) return
+    peerRef.current?.sendCall({
+      signal: "presence",
+      callId: c.callId,
+      roomId: c.roomId,
+      kind: c.kind,
+      callerId: c.callerId,
+      startedAt: c.startAt ?? c.dialedAt ?? Date.now(),
+      participants,
+    })
+  }
+
+  // Tự động kết thúc cuộc gọi nhóm khi chỉ còn 1 người (quy tắc gọi nhóm cần ≥ 2 người)
+  useEffect(() => {
+    if (!call || call.state !== "in-call" || !call.isGroup) return
+    const rem = (call.participants ?? []).filter((p) => p.userId && p.userId !== meId).length
+    if (rem === 0) {
+      const timer = window.setTimeout(() => {
+        const cur = callStateRef.current
+        if (!cur || cur.state !== "in-call" || !cur.isGroup) return
+        const remaining = (cur.participants ?? []).filter((p) => p.userId && p.userId !== meId).length
+        if (remaining === 0) {
+          callDebug("tu-dong-ket-thuc-chi-con-1-nguoi", { callId: cur.callId })
+          const s = callSessionRef.current
+          if (s) {
+            try {
+              s.hangup("empty")
+            } catch {}
+          }
+          callSessionRef.current = null
+          pushToast("Cuộc gọi đã kết thúc vì chỉ còn một người")
+          finalizeCall("completed")
+        }
+      }, 2000)
+      return () => window.clearTimeout(timer)
+    }
+  }, [call?.state, call?.isGroup, call?.participants, meId])
+
+  // Khi đóng tab/cửa sổ/refresh: ngắt kết nối ngay để các peer khác không bị treo
+  useEffect(() => {
+    const handleUnload = () => {
+      const s = callSessionRef.current
+      if (s && !s.isFinished) {
+        try {
+          s.hangup("unload")
+        } catch {}
+      }
+    }
+    window.addEventListener("beforeunload", handleUnload)
+    window.addEventListener("pagehide", handleUnload)
+    return () => {
+      window.removeEventListener("beforeunload", handleUnload)
+      window.removeEventListener("pagehide", handleUnload)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!call || call.state !== "in-call" || !call.isGroup) return
+    broadcastGroupPresence()
+    const id = window.setInterval(
+      broadcastGroupPresence,
+      GROUP_CALL_PRESENCE_INTERVAL_MS,
+    )
+    return () => window.clearInterval(id)
+  }, [call?.state, call?.callId, call?.isGroup, meId])
+
   /** Máy đang bận cuộc gọi (đang chuông / đang kết nối / đang gọi) — dùng để khoá nút gọi. */
   const callBusy = !!call && call.state !== "ended" && call.state !== "failed"
 
@@ -597,6 +820,15 @@ export function useCallManager({
     if (!roomId) {
       pushToast("Phòng chưa sẵn sàng để gọi")
       return
+    }
+    // Nếu phòng nhóm đang có cuộc gọi diễn ra: tự động tham gia vào cuộc gọi đó
+    if (conv.isGroup) {
+      const ongoing = ongoingCallForRoom(ongoingGroupCalls, roomId, Date.now())
+      if (ongoing) {
+        callDebug("chuyen-sang-join-group-call", { roomId, callId: ongoing.callId })
+        void joinGroupCall(ongoing)
+        return
+      }
     }
     let peerIds = (conv.members ?? [])
       .map((m) => m.id)
@@ -705,6 +937,106 @@ export function useCallManager({
   }
 
   /**
+   * Tham gia (lại) một cuộc gọi NHÓM đang diễn ra.
+   *
+   * Khác `startCall`: KHÔNG tạo `callId` mới — dùng đúng `callId` hiện tại rồi gửi `accept`
+   * để các thành viên cũ thêm ta vào mesh. Vì vậy không bị họ từ chối "busy" như khi gọi mới.
+   */
+  const joinGroupCall = async (ongoing: OngoingGroupCall) => {
+    if (callSessionRef.current) {
+      if (
+        callSessionRef.current.isFinished ||
+        !callStateRef.current ||
+        callStateRef.current.state === "ended"
+      ) {
+        try {
+          callSessionRef.current.close()
+        } catch {}
+        callSessionRef.current = null
+      }
+    }
+    const gate = canStartCall(localCallView())
+    if (!gate.ok) {
+      pushToast(gate.reason ?? "Đang có cuộc gọi khác")
+      return
+    }
+    const conv = findConvByRoom(ongoing.roomId)
+    if (!conv || !conv.isGroup) {
+      pushToast("Không tìm thấy cuộc gọi nhóm để tham gia")
+      return
+    }
+    clearCallTimers()
+    const session = buildCallSession({
+      kind: ongoing.kind,
+      roomId: ongoing.roomId,
+      callId: ongoing.callId,
+      isCaller: false,
+      callerId: ongoing.callerId ?? 0,
+      callerName: ongoing.callerName ?? conv.name,
+    })
+    callSessionRef.current = session
+    setCallMuted(false)
+    setCallVideoOff(false)
+    setCallRemoteStreams({})
+    setCallLocalStream(null)
+    const nextCall: ActiveCallState = {
+      kind: ongoing.kind,
+      dir: "in",
+      state: "connecting",
+      name: conv.name,
+      avatar: conv.avatar,
+      isGroup: true,
+      convId: conv.id,
+      roomId: ongoing.roomId,
+      callId: ongoing.callId,
+      callerId: ongoing.callerId,
+      peerId: ongoing.callerId,
+      dialedAt: ongoing.startedAt,
+      startAt: ongoing.startedAt,
+      acked: true,
+      participants: [],
+    }
+    callStateRef.current = nextCall
+    setCall(nextCall)
+    setCallMinimized(false)
+    await session.accept()
+    setCallLocalStream(session.localStream)
+    // Không ai phản hồi (cuộc gọi vừa kết thúc): đừng treo "đang kết nối" mãi.
+    waitCall(() => {
+      const cur = callStateRef.current
+      if (
+        !cur ||
+        cur.callId !== ongoing.callId ||
+        cur.state === "in-call" ||
+        cur.state === "ended" ||
+        cur.state === "failed" ||
+        (cur.participants?.length ?? 0) > 0
+      ) {
+        return
+      }
+      callDebug("het-han-tham-gia-nhom", { callId: ongoing.callId })
+      clearCallTimers()
+      try {
+        session.hangup("rejoin-timeout")
+      } catch {}
+      callSessionRef.current = null
+      pushToast("Không tham gia được — cuộc gọi nhóm có thể đã kết thúc")
+      closeCallSession()
+      setCall((c) =>
+        c && c.callId === ongoing.callId
+          ? { ...c, state: "failed", reason: "Cuộc gọi nhóm đã kết thúc" }
+          : c,
+      )
+      waitCall(() => {
+        setCall((c) => (c && c.callId === ongoing.callId ? null : c))
+        if (callStateRef.current?.callId === ongoing.callId) {
+          callStateRef.current = null
+        }
+      }, 1600)
+    }, 12000)
+  }
+
+  /**
    * Bắt đầu đồng hồ 45 giây "không có người trả lời" — CHỈ sau khi đã nhận ack end-to-end
    * (lời mời đã thực sự tới UI người nhận). Trước ack, việc chờ do timer ack quản lý.
    */
@@ -728,6 +1060,11 @@ export function useCallManager({
     if (!f.callId || f.roomId === undefined) return
     const currentMyId = meId
     if (f.fromUserId !== undefined && currentMyId > 0 && f.fromUserId === currentMyId) return
+    // Nhịp "cuộc gọi nhóm đang diễn ra": chỉ cập nhật thẻ Tham gia, không đụng phiên gọi.
+    if (f.signal === "presence") {
+      handleCallPresence(f)
+      return
+    }
     if (f.signal === "invite") {
       // Quy tắc 2-4: một cuộc gọi tại một thời điểm + phân xử khi hai bên cùng gọi nhau.
       const local = localCallView()
@@ -863,6 +1200,34 @@ export function useCallManager({
       callStateRef.current = nextCall
       setCall(nextCall)
       setCallMinimized(false)
+
+      // Cuộc gọi nhóm đến: Sau 30 giây nếu không nghe máy thì tự động ngắt chuông cuộc gọi đến
+      if (nextCall.isGroup) {
+        waitCall(() => {
+          const cur = callStateRef.current
+          if (
+            cur &&
+            cur.callId === f.callId &&
+            shouldTimeoutUnansweredGroupMember({
+              isGroup: cur.isGroup,
+              dir: cur.dir,
+              state: cur.state,
+              dialedAt: cur.dialedAt ?? 0,
+              now: Date.now(),
+            })
+          ) {
+            callDebug("het-han-nghe-may-nhom-30s", { callId: f.callId })
+            const s = callSessionRef.current
+            if (s) {
+              try {
+                s.hangup("timeout")
+              } catch {}
+            }
+            callSessionRef.current = null
+            finalizeCall("missed")
+          }
+        }, 30000)
+      }
       return
     }
     if (f.type === "call_state") {
@@ -932,32 +1297,75 @@ export function useCallManager({
       pushToast(message)
     }
     if (f.signal === "accept" || f.signal === "answer") {
-      clearCallTimers()
-      if (
-        callStateRef.current &&
-        (callStateRef.current.callId === f.callId ||
-          (callStateRef.current.roomId !== undefined &&
-            callStateRef.current.roomId === f.roomId))
-      ) {
+      const cur = callStateRef.current
+      // Trong cuộc gọi NHÓM, Core phát `accept` của người trả lời cho cả phòng. Máy đang
+      // đổ chuông (cuộc gọi ĐẾN) cũng nhận khung này nên KHÔNG được đổi trạng thái —
+      // chỉ bên GỌI ĐI mới chuyển sang "đang kết nối" (xem shouldMarkAnsweredByPeer).
+      const answered = shouldMarkAnsweredByPeer({
+        currentDir: cur?.dir,
+        currentCallId: cur?.callId,
+        currentRoomId: cur?.roomId,
+        frameCallId: f.callId,
+        frameRoomId: f.roomId,
+      })
+      callDebug("accept-nhan-duoc", {
+        callId: f.callId,
+        roomId: f.roomId,
+        from: f.fromUserId,
+        dir: cur?.dir,
+        localCallId: cur?.callId,
+        markAnswered: answered,
+      })
+      if (answered && cur) {
+        clearCallTimers()
         callStateRef.current = {
-          ...callStateRef.current,
+          ...cur,
           acked: true,
-          state:
-            callStateRef.current.state === "calling"
-              ? "connecting"
-              : callStateRef.current.state,
+          state: cur.state === "calling" ? "connecting" : cur.state,
         }
-        setCall((cur) =>
-          cur &&
-          (cur.callId === f.callId ||
-            (cur.roomId !== undefined && cur.roomId === f.roomId))
+        setCall((c) =>
+          c && c.callId === cur.callId
             ? {
-                ...cur,
+                ...c,
                 acked: true,
-                state: cur.state === "calling" ? "connecting" : cur.state,
+                state: c.state === "calling" ? "connecting" : c.state,
               }
-            : cur,
+            : c,
         )
+      } else if (
+        !answered &&
+        cur &&
+        cur.dir === "in" &&
+        cur.isGroup &&
+        cur.state === "calling" &&
+        cur.callId === f.callId
+      ) {
+        // Trong cuộc gọi nhóm: Đã có người khác bắt máy, nhưng máy này vẫn đang đổ chuông (chưa bắt máy).
+        // Thiết lập đồng hồ 30 giây kể từ khi có người bắt máy; nếu sau 30 giây vẫn không nghe thì tự ngắt chuông.
+        waitCall(() => {
+          const latest = callStateRef.current
+          if (
+            latest &&
+            latest.callId === f.callId &&
+            shouldTimeoutUnansweredGroupMember({
+              isGroup: latest.isGroup,
+              dir: latest.dir,
+              state: latest.state,
+              dialedAt: latest.dialedAt ?? 0,
+              now: Date.now(),
+            })
+          ) {
+            callDebug("nguoi-khac-da-bat-may-het-han-30s", { callId: f.callId })
+            const s = callSessionRef.current
+            if (s) {
+              try {
+                s.hangup("timeout")
+              } catch {}
+            }
+            callSessionRef.current = null
+            finalizeCall("missed")
+          }
+        }, 30000)
       }
     }
     callSessionRef.current?.handle(f)
@@ -1017,6 +1425,7 @@ export function useCallManager({
 
   const hangUp = () => {
     const c = callStateRef.current
+    stopAllRingtones()
     clearCallTimers()
     const s = callSessionRef.current
     if (s) s.hangup()
@@ -1036,6 +1445,7 @@ export function useCallManager({
   const acceptIncoming = async () => {
     const s = callSessionRef.current
     if (!s) return
+    stopAllRingtones()
     clearCallTimers()
     setCall((c) => (c ? { ...c, state: "connecting" } : c))
     await s.accept()
@@ -1223,7 +1633,9 @@ export function useCallManager({
     callRoster,
     callTotalCount,
     callSessionRef,
+    ongoingGroupCalls,
     startCall,
+    joinGroupCall,
     handlePeerCall,
     handlePeerError,
     hangUp,

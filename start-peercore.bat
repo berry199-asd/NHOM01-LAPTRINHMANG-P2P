@@ -46,5 +46,10 @@ if not exist "%LIB%\*.jar" (
   )
 )
 
+if exist "%ROOT%backend\build\libs\workchat-tracker-0.1.0.jar" (
+  copy /y "%ROOT%backend\build\libs\workchat-tracker-0.1.0.jar" "%LIB%\workchat-tracker-0.1.0.jar" >nul 2>&1
+)
+
 echo [peer] Tracker: %PEER_SERVER_URL%
-java -cp "%LIB%\*" com.workchat.peer.cli.PeerCoreCli %*
+chcp 65001 >nul
+java -Dfile.encoding=UTF-8 -Dsun.stdout.encoding=UTF-8 -Dsun.stderr.encoding=UTF-8 -cp "%LIB%\*" com.workchat.peer.cli.PeerCoreCli %*
