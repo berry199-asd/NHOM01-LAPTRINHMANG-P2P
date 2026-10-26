@@ -39,7 +39,7 @@ import java.util.Set;
 public final class UiWsServer {
     /** Các tín hiệu thiết lập cuộc gọi (WebRTC) được chuyển qua kênh sự kiện nhẹ. */
     private static final Set<String> CALL_SIGNALS = Set.of(
-            "invite", "accept", "reject", "cancel", "end", "offer", "answer", "ice");
+            "invite", "accept", "reject", "cancel", "end", "offer", "answer", "ice", "presence");
 
     /** Cấu hình bảo mật cho UI WS. */
     public record Security(Set<String> allowedOrigins, boolean allowAnyOrigin, boolean allowNoOrigin) {
@@ -158,6 +158,31 @@ public final class UiWsServer {
         Object cnv = m.get("callerName");
         if (cnv instanceof String cns && cns.length() <= 128) {
             fields.put("callerName", cns);
+        }
+        // Tín hiệu `presence` (cuộc gọi nhóm đang diễn ra): chỉ là định danh, không nội dung.
+        Object callerIdv = m.get("callerId");
+        if (callerIdv instanceof Number cidn) {
+            fields.put("callerId", cidn.longValue());
+        }
+        Object startedAtv = m.get("startedAt");
+        if (startedAtv instanceof Number san) {
+            fields.put("startedAt", san.longValue());
+        }
+        Object pv = m.get("participants");
+        if (pv == null) {
+            pv = m.get("participantIds");
+        }
+        if (pv instanceof List<?> pl) {
+            List<Long> ids = new ArrayList<>();
+            for (Object item : pl) {
+                if (ids.size() >= 256) {
+                    break;
+                }
+                if (item instanceof Number n) {
+                    ids.add(n.longValue());
+                }
+            }
+            fields.put("participants", ids);
         }
         Object sdpv = m.get("sdp");
         if (sdpv instanceof String ss && ss.length() <= 65536) {

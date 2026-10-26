@@ -68,7 +68,7 @@ export function InfoPanel({
   onBlock: () => void
   onUnblock: () => void
   onDeleteChat: () => void
-  onReport: () => void
+  onReport: (evidenceNote: string) => void | Promise<void>
   onPushToast: (text: string) => void
   onClose: () => void
   onOpenLightbox: (msgId: number) => void
@@ -1509,8 +1509,8 @@ export function InfoPanel({
                 Huỷ
               </button>
               <button
-                onClick={() => {
-                  onReport()
+                onClick={async () => {
+                  await onReport(reportText.trim())
                   setReportText("")
                   setReportOpen(false)
                 }}

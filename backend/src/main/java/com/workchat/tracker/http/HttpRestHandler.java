@@ -67,9 +67,9 @@ public final class HttpRestHandler extends SimpleChannelInboundHandler<FullHttpR
     /** Nhãn thuật toán phong bì E2E (<= 32 ký tự, khớp cột message_cache.algo). */
     private static final String E2E_ALGO = "v1:OAEP256+GCM256+PSS256";
     private static final java.util.Set<String> OFFLINE_TYPES =
-            java.util.Set.of("text", "image", "video", "file", "voice");
+            java.util.Set.of("text", "image", "video", "file", "voice", "edit");
     private static final java.util.Set<String> OFFLINE_CONTENT_TYPES =
-            java.util.Set.of("text", "voice_short", "media_ref");
+            java.util.Set.of("text", "voice_short", "media_ref", "edit");
     private static final int MAX_PULL_IDS = 500;
 
     /** Khoá cấu hình admin được phép ghi (số nguyên) — tránh ghi tuỳ tiện vào system_config. */
@@ -130,10 +130,7 @@ public final class HttpRestHandler extends SimpleChannelInboundHandler<FullHttpR
     private final Map<String, LoginFail> loginFails = new ConcurrentHashMap<>();
     private final Map<String, Bucket> rateBuckets = new ConcurrentHashMap<>();
 
-    private static final class LoginFail {
-        long windowStart;
-        int count;
-    }
+    private record LoginFail(long windowStart, int count) {}
 
     private static final class Bucket {
         long start;
@@ -278,6 +275,7 @@ public final class HttpRestHandler extends SimpleChannelInboundHandler<FullHttpR
             case "/api/admin/config" -> adminConfig(ctx, m, req);
             case "/api/admin/reports" -> getOnly(ctx, m, () -> handleAdminReports(ctx, req, query));
             case "/api/admin/broadcasts" -> adminBroadcasts(ctx, m, req, query);
+            case "/api/reports" -> postOnly(ctx, m, () -> handleCreateReport(ctx, req));
             default -> {
                 if (path.equals("/api/blob") || path.startsWith("/api/blob/")) {
                     handleBlob(ctx, m, req, path, query);
@@ -510,7 +508,7 @@ public final class HttpRestHandler extends SimpleChannelInboundHandler<FullHttpR
         return switch (key) {
             case "max_image_mb" -> Math.max(1, Math.min(50, val));
             case "max_file_mb_direct" -> Math.max(1, Math.min(100, val));
-            case "max_file_mb_blob" -> Math.max(1, Math.min(50, val));
+            case "max_file_mb_blob" -> Math.max(1, Math.min(100, val));
             case "max_files_per_message" -> Math.max(1, Math.min(20, val));
             case "user_blob_quota_mb" -> Math.max(10, Math.min(2048, val));
             case "blob_ttl_days" -> Math.max(1, Math.min(30, val));
@@ -528,7 +526,7 @@ public final class HttpRestHandler extends SimpleChannelInboundHandler<FullHttpR
     }
 
     public int maxFileMbBlob() {
-        return clampConfig("max_file_mb_blob", configDao.getInt("max_file_mb_blob", 10));
+        return clampConfig("max_file_mb_blob", configDao.getInt("max_file_mb_blob", 50));
     }
 
     public int maxFilesPerMessage() {
@@ -752,25 +750,25 @@ public final class HttpRestHandler extends SimpleChannelInboundHandler<FullHttpR
         String failKey = remoteIp(ctx) + "|" + loginName.toLowerCase(Locale.ROOT);
         long now = System.currentTimeMillis();
         LoginFail cur = loginFails.get(failKey);
-        if (cur != null && now - cur.windowStart < LOGIN_WINDOW_MS
-                && cur.count >= MAX_LOGIN_ATTEMPTS) {
-            write(ctx, HttpResponseStatus.TOO_MANY_REQUESTS, err("too_many_attempts"));
-            return;
-        }
-        if (cur != null && now - cur.windowStart >= LOGIN_WINDOW_MS) {
-            loginFails.remove(failKey);
+        if (cur != null) {
+            if (now - cur.windowStart() < LOGIN_WINDOW_MS) {
+                if (cur.count() >= MAX_LOGIN_ATTEMPTS) {
+                    write(ctx, HttpResponseStatus.TOO_MANY_REQUESTS, err("too_many_attempts"));
+                    return;
+                }
+            } else {
+                loginFails.remove(failKey, cur);
+            }
         }
         Optional<User> opt = dao.findByLogin(loginName);
         if (opt.isEmpty()
                 || !BCrypt.verifyer().verify(password.toCharArray(), opt.get().passHash()).verified) {
-            LoginFail f = loginFails.get(failKey);
-            if (f == null || now - f.windowStart >= LOGIN_WINDOW_MS) {
-                f = new LoginFail();
-                f.windowStart = now;
-                f.count = 0;
-                loginFails.put(failKey, f);
-            }
-            f.count++;
+            loginFails.compute(failKey, (k, old) -> {
+                if (old == null || now - old.windowStart() >= LOGIN_WINDOW_MS) {
+                    return new LoginFail(now, 1);
+                }
+                return new LoginFail(old.windowStart(), old.count() + 1);
+            });
             write(ctx, HttpResponseStatus.UNAUTHORIZED, err("invalid_credentials"));
             return;
         }
@@ -1197,6 +1195,38 @@ public final class HttpRestHandler extends SimpleChannelInboundHandler<FullHttpR
             return;
         }
         write(ctx, HttpResponseStatus.OK, Json.write(Map.of("ok", true, "role", role)));
+    }
+
+    private void handleCreateReport(ChannelHandlerContext ctx, FullHttpRequest req) throws SQLException {
+        User u = requireUser(ctx, bearer(req));
+        if (u == null) return;
+
+        JsonNode b = Json.tree(body(req));
+        String targetType = nstr(b, "target_type");
+        String targetId = nstr(b, "target_id");
+        String reason = nstr(b, "reason");
+        String evidenceNote = nstr(b, "evidence_note");
+
+        if (targetType == null || targetType.isBlank() || targetId == null || targetId.isBlank()) {
+            write(ctx, HttpResponseStatus.BAD_REQUEST, err("missing_target"));
+            return;
+        }
+        if (!targetType.equals("user") && !targetType.equals("room") && !targetType.equals("message")) {
+            write(ctx, HttpResponseStatus.BAD_REQUEST, err("invalid_target_type"));
+            return;
+        }
+        if (reason == null || reason.isBlank()) {
+            reason = "Báo cáo vi phạm từ cuộc trò chuyện";
+        }
+        if (reportsDao == null) {
+            write(ctx, HttpResponseStatus.INTERNAL_SERVER_ERROR, err("db_error"));
+            return;
+        }
+        long id = reportsDao.create(u.id(), targetType, targetId, reason, evidenceNote);
+        if (systemLogDao != null) {
+            systemLogDao.log("REPORT", u.id(), remoteIp(ctx), "Báo cáo #" + id + " (" + targetType + ":" + targetId + ")");
+        }
+        write(ctx, HttpResponseStatus.OK, Json.write(Map.of("ok", true, "id", id)));
     }
 
     private void handleAdminReports(ChannelHandlerContext ctx, FullHttpRequest req, String query) throws SQLException {
@@ -2728,6 +2758,7 @@ public final class HttpRestHandler extends SimpleChannelInboundHandler<FullHttpR
             write(ctx, HttpResponseStatus.BAD_REQUEST, err("bad_reply"));
             return;
         }
+        String originalClientId = nstr(b, "original_client_id");
         Long sentAt = longNode(b, "sent_at");
         if (sentAt != null && sentAt <= 0) {
             sentAt = null;
@@ -2791,6 +2822,10 @@ public final class HttpRestHandler extends SimpleChannelInboundHandler<FullHttpR
         }
         boolean duplicate = ownerRoom.isPresent();
         roomDao.ensureMessageMeta(roomId, me.id(), clientMsgId, type, replyTo, null, sentAt);
+        if ("edit".equals(type) || originalClientId != null) {
+            String targetCid = originalClientId != null ? originalClientId : clientMsgId;
+            roomDao.markEdited(roomId, targetCid);
+        }
         int stored = offlineDao.store(roomId, me.id(), clientMsgId, contentType, sentAt,
                 offlineConfig.ttlDays(), list);
         Map<String, Object> out = new LinkedHashMap<>();
@@ -2844,6 +2879,10 @@ public final class HttpRestHandler extends SimpleChannelInboundHandler<FullHttpR
             m.put("signature", CryptoBox.b64(r.signature()));
             m.put("ciphertext", CryptoBox.b64(r.ciphertext()));
             m.put("sent_at", r.sentAtMs());
+            m.put("is_edited", r.isEdited());
+            if (r.editedAtMs() != null) {
+                m.put("edited_at", r.editedAtMs());
+            }
             items.add(m);
         }
         Map<String, Object> out = new LinkedHashMap<>();

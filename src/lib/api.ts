@@ -721,6 +721,13 @@ export const api = {
     postWithAuth<{ ok: boolean; error?: string }>("/api/e2e/otp/request", { email }),
   e2eOtpVerify: (email: string, otp: string) =>
     postWithAuth<{ ok: boolean; ticket?: string; error?: string }>("/api/e2e/otp/verify", { email, otp }),
+  createReport: (data: {
+    target_type: "user" | "room" | "message"
+    target_id: string
+    reason?: string
+    evidence_note?: string
+  }) =>
+    postWithAuth<{ ok: boolean; id?: number; error?: string }>("/api/reports", data),
 }
 
 export type { ApiUser as User }

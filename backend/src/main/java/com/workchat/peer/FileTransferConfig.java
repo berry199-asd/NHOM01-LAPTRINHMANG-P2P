@@ -26,9 +26,9 @@ public final class FileTransferConfig {
     /** Chờ liên kết trực tiếp tối đa 3 giây trước khi chuyển sang blob. */
     public static final long DIRECT_LINK_WAIT_MS = 3_000L;
     /** Kích thước tối đa đi đường trực tiếp (tạm — phần sau làm đầy đủ). */
-    public static final long MAX_DIRECT_BYTES = 25L * 1024 * 1024;
+    public static final long MAX_DIRECT_BYTES = 50L * 1024 * 1024;
     /** Kích thước tối đa đi đường blob (tạm — phần sau làm đầy đủ). */
-    public static final long MAX_BLOB_BYTES = 10L * 1024 * 1024;
+    public static final long MAX_BLOB_BYTES = 50L * 1024 * 1024;
     /**
      * Kích thước tối đa UI được phép nạp lên Core cục bộ (loopback, ghi thẳng đĩa).
      * Giữ ngang giới hạn UI (video 100MB); đường truyền đi sẽ do FileRoute quyết định.

@@ -43,6 +43,9 @@ export interface PeerOfflineMsg {
   sentAt: number
   offline?: boolean
   senderUsername?: string
+  is_edited?: boolean
+  edited_at?: number
+  originalClientId?: string
 }
 
 export interface PeerHistoryMsg {
@@ -83,6 +86,12 @@ export type CallSignal =
   | "offer"
   | "answer"
   | "ice"
+  /**
+   * Nhịp "cuộc gọi nhóm đang diễn ra" do người ĐANG TRONG cuộc gọi phát định kỳ.
+   * Không dùng để thiết lập WebRTC — chỉ để người ngoài/người vừa rời thấy thẻ
+   * "Tham gia" và biết `callId` cần tham gia lại.
+   */
+  | "presence"
 
 /**
  * Trạng thái gửi một khung cuộc gọi, do Peer Core bên gọi báo về (frame `call_state`):
@@ -115,6 +124,12 @@ export interface CallSignalPayload {
   /** userId đích cho offer/answer/ice (bỏ trống với invite/accept/reject/cancel/end). */
   to?: number
   callerName?: string
+  /** Người khởi tạo cuộc gọi — đi kèm tín hiệu `presence` để người vào lại hiển thị đúng phía. */
+  callerId?: number
+  /** epoch ms lúc cuộc gọi bắt đầu — giữ nguyên thời lượng khi người rời vào lại. */
+  startedAt?: number
+  /** Tín hiệu `presence`: userId của TẤT CẢ người đang thật sự trong cuộc gọi (gồm cả người gửi). */
+  participants?: number[]
   sdp?: string
   sdpType?: "offer" | "answer"
   candidate?: CallCandidate
@@ -253,6 +268,10 @@ export interface PeerUiFrame {
   kind?: CallKind
   to?: number
   callerName?: string
+  callerId?: number
+  startedAt?: number
+  /** frame `call` signal `presence`: userId của những người đang trong cuộc gọi. */
+  participants?: number[]
   sdp?: string
   sdpType?: "offer" | "answer"
   candidate?: CallCandidate

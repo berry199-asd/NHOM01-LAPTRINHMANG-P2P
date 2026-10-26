@@ -1,6 +1,16 @@
 import { useEffect, useRef, useState } from "react"
 import { api, type ApiPublicUser, type Relation } from "../lib/api"
 import { RelationActions } from "./RelationActions"
+import {
+  BUILTIN_RINGTONES,
+  loadRingtoneConfig,
+  saveRingtoneConfig,
+  setCustomRingtoneFile,
+  initRingtone,
+  previewRingtone,
+  stopAllRingtones,
+  type RingtoneConfig,
+} from "../lib/ringtone"
 
 export interface ProfileData {
   name: string
@@ -22,7 +32,7 @@ interface BlockedUser {
   initials: string
 }
 
-type View = "main" | "privacy" | "blocked"
+type View = "main" | "privacy" | "blocked" | "ringtone"
 
 interface Props {
   mode: "self" | "other"
@@ -354,6 +364,79 @@ export function ProfilePanel({
   phonePublic = true,
 }: Props) {
   const [view, setView] = useState<View>("main")
+  const [ringtoneConfig, setRingtoneConfig] = useState<RingtoneConfig>(loadRingtoneConfig)
+  const [previewingId, setPreviewingId] = useState<string | null>(null)
+  const ringtoneFileInputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    return () => {
+      stopAllRingtones()
+    }
+  }, [])
+
+  const handleSelectRingtone = (id: string) => {
+    const updated = { ...ringtoneConfig, id }
+    setRingtoneConfig(updated)
+    saveRingtoneConfig({ id })
+    if (previewingId) {
+      previewRingtone(id, updated.customDataUrl, updated.volume)
+      setPreviewingId(id)
+    }
+  }
+
+  const handleTogglePreview = (id: string) => {
+    if (previewingId === id) {
+      stopAllRingtones()
+      setPreviewingId(null)
+    } else {
+      previewRingtone(id, ringtoneConfig.customDataUrl, ringtoneConfig.volume)
+      setPreviewingId(id)
+    }
+  }
+
+  const handleVolumeChange = (vol: number) => {
+    const updated = { ...ringtoneConfig, volume: vol }
+    setRingtoneConfig(updated)
+    saveRingtoneConfig({ volume: vol })
+    if (previewingId) {
+      previewRingtone(previewingId, ringtoneConfig.customDataUrl, vol)
+    }
+  }
+
+  useEffect(() => {
+    initRingtone().then((url) => {
+      if (url) {
+        setRingtoneConfig((prev) => ({ ...prev, customDataUrl: url }))
+      }
+    })
+  }, [])
+
+  const handleCustomAudioUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    if (file.size > 15 * 1024 * 1024) {
+      onPushToast?.("Vui lòng chọn file âm thanh nhỏ hơn 15MB")
+      e.target.value = ""
+      return
+    }
+    try {
+      const audioUrl = await setCustomRingtoneFile(file)
+      const updated: RingtoneConfig = {
+        ...ringtoneConfig,
+        id: "custom",
+        customDataUrl: audioUrl,
+        customName: file.name,
+      }
+      setRingtoneConfig(updated)
+      onPushToast?.(`Đã lưu nhạc chuông: ${file.name}`)
+      previewRingtone("custom", audioUrl, updated.volume)
+      setPreviewingId("custom")
+    } catch {
+      onPushToast?.("Không thể lưu file nhạc chuông. Vui lòng thử lại")
+    } finally {
+      e.target.value = ""
+    }
+  }
   const [saved, setSaved] = useState<ProfileData>(profile)
   const [draft, setDraft] = useState<ProfileData>(profile)
   const [editingName, setEditingName] = useState(false)
@@ -470,6 +553,8 @@ export function ProfilePanel({
   })()
 
   const tryClose = () => {
+    stopAllRingtones()
+    setPreviewingId(null)
     if (selfMode && dirty && !saving) setConfirmUnsaved(true)
     else onClose()
   }
@@ -549,14 +634,16 @@ export function ProfilePanel({
           ) : (
             <>
               <div className="flex items-center gap-2">
-                <ChevronBack onClick={() => setView("main")} />
+                <ChevronBack onClick={() => { stopAllRingtones(); setPreviewingId(null); setView("main"); }} />
                 <h2
                   className="text-base font-semibold"
                   style={{ color: "var(--text)" }}
                 >
                   {view === "privacy"
                     ? "Quyền riêng tư và hỗ trợ"
-                    : "Danh sách đã chặn"}
+                    : view === "blocked"
+                      ? "Danh sách đã chặn"
+                      : "Nhạc chuông cuộc gọi"}
                 </h2>
               </div>
               <button
@@ -1170,6 +1257,25 @@ export function ProfilePanel({
                         strokeLinecap="round"
                         strokeLinejoin="round"
                       >
+                        <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+                        <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+                      </svg>
+                    }
+                    label="Nhạc chuông cuộc gọi"
+                    onClick={() => setView("ringtone")}
+                  />
+                  <LinkRow
+                    icon={
+                      <svg
+                        width="16"
+                        height="16"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
                         <circle cx="12" cy="12" r="10" />
                         <line x1="4.93" y1="4.93" x2="19.07" y2="19.07" />
                       </svg>
@@ -1298,6 +1404,154 @@ export function ProfilePanel({
               />
             </div>
 
+          </div>
+        )}
+
+        {view === "ringtone" && (
+          <div className="flex-1 overflow-y-auto px-5 pt-4 pb-6 flex flex-col gap-4">
+            <div className="flex items-start gap-2.5">
+              <svg
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="flex-shrink-0 mt-0.5"
+                style={{ color: "var(--muted)" }}
+              >
+                <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+                <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+              </svg>
+              <p className="text-xs leading-relaxed" style={{ color: "var(--muted)" }}>
+                Cài đặt nhạc chuông riêng cho máy này. Nhạc chuông sẽ tự động reo khi có cuộc gọi đến. Bạn có thể chọn giai điệu có sẵn hoặc tải bài hát từ máy tính của bạn.
+              </p>
+            </div>
+
+            {/* Điều chỉnh âm lượng */}
+            <div
+              className="p-3.5 rounded-xl flex flex-col gap-2"
+              style={{ backgroundColor: "var(--surface)", border: "1px solid var(--border)" }}
+            >
+              <div className="flex items-center justify-between text-xs font-semibold" style={{ color: "var(--text)" }}>
+                <span>Âm lượng chuông</span>
+                <span>{Math.round(ringtoneConfig.volume * 100)}%</span>
+              </div>
+              <input
+                type="range"
+                min="0"
+                max="1"
+                step="0.05"
+                value={ringtoneConfig.volume}
+                onChange={(e) => handleVolumeChange(Number.parseFloat(e.target.value))}
+                className="w-full cursor-pointer accent-blue-600"
+              />
+            </div>
+
+            {/* Danh sách nhạc chuông */}
+            <div className="flex flex-col gap-2 mt-1">
+              <span className="text-xs font-semibold tracking-wider uppercase px-1" style={{ color: "var(--muted)" }}>
+                Danh sách giai điệu
+              </span>
+
+              {BUILTIN_RINGTONES.map((r) => {
+                const isSelected = ringtoneConfig.id === r.id
+                const isPlayingThis = previewingId === r.id
+                return (
+                  <div
+                    key={r.id}
+                    onClick={() => handleSelectRingtone(r.id)}
+                    className="p-3 rounded-xl flex items-center justify-between cursor-pointer transition-all hover:scale-[1.01]"
+                    style={{
+                      backgroundColor: isSelected ? "var(--accent-subtle, rgba(59, 130, 246, 0.08))" : "var(--surface)",
+                      border: isSelected ? "1.5px solid var(--primary, #3b82f6)" : "1px solid var(--border)",
+                    }}
+                  >
+                    <div className="flex items-center gap-3 min-w-0 pr-2">
+                      <div
+                        className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0"
+                        style={{
+                          backgroundColor: isSelected ? "var(--primary, #3b82f6)" : "var(--bg)",
+                          color: isSelected ? "#fff" : "var(--muted)",
+                        }}
+                      >
+                        {isSelected ? (
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                            <polyline points="20 6 9 17 4 12" />
+                          </svg>
+                        ) : (
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+                          </svg>
+                        )}
+                      </div>
+                      <div className="flex flex-col min-w-0">
+                        <span className="text-sm font-semibold truncate" style={{ color: "var(--text)" }}>
+                          {r.name}
+                        </span>
+                        <span className="text-xs truncate" style={{ color: "var(--muted)" }}>
+                          {r.id === "custom" && ringtoneConfig.customName
+                            ? `File: ${ringtoneConfig.customName}`
+                            : r.desc}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 flex-shrink-0" onClick={(e) => e.stopPropagation()}>
+                      {r.id === "custom" && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => ringtoneFileInputRef.current?.click()}
+                            className="px-2.5 py-1 text-xs font-medium rounded-lg transition-colors hover:opacity-80"
+                            style={{
+                              backgroundColor: "var(--bg)",
+                              border: "1px solid var(--border)",
+                              color: "var(--text)",
+                            }}
+                          >
+                            {ringtoneConfig.customDataUrl ? "Đổi file" : "Tải file"}
+                          </button>
+                          <input
+                            ref={ringtoneFileInputRef}
+                            type="file"
+                            accept="audio/*,.mp3,.wav,.ogg,.m4a"
+                            className="hidden"
+                            onChange={handleCustomAudioUpload}
+                          />
+                        </>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={() => handleTogglePreview(r.id)}
+                        disabled={r.id === "custom" && !ringtoneConfig.customDataUrl}
+                        className="w-8 h-8 rounded-full flex items-center justify-center transition-transform hover:scale-110 disabled:opacity-30 disabled:hover:scale-100"
+                        style={{
+                          backgroundColor: isPlayingThis ? "var(--primary, #3b82f6)" : "var(--bg)",
+                          color: isPlayingThis ? "#fff" : "var(--text)",
+                          border: "1px solid var(--border)",
+                        }}
+                        title={isPlayingThis ? "Dừng nghe thử" : "Nghe thử"}
+                      >
+                        {isPlayingThis ? (
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+                            <rect x="6" y="4" width="4" height="16" />
+                            <rect x="14" y="4" width="4" height="16" />
+                          </svg>
+                        ) : (
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+                            <polygon points="5 3 19 12 5 21 5 3" />
+                          </svg>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
           </div>
         )}
 

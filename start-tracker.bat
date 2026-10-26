@@ -12,6 +12,7 @@ if "%PORT%"=="" set "PORT=%TRACKER_PORT%"
 if "%PORT%"=="" set "PORT=9090"
 set "TRACKER_PORT=%PORT%"
 if "%TRACKER_HEARTBEAT_PORT%"=="" set "TRACKER_HEARTBEAT_PORT=9091"
+if "%DB_URL%"=="" set "DB_URL=jdbc:mysql://127.0.0.1:3306/workchat?useSSL=false&serverTimezone=Asia/Ho_Chi_Minh&characterEncoding=UTF-8&connectionCollation=utf8mb4_unicode_ci&rewriteBatchedStatements=true"
 set "LIB=%ROOT%backend\build\install\workchat-tracker\lib"
 
 rem Tu dong dung JDK 22 neu he thong dang tro vao JDK khong tuong thich Gradle
@@ -35,6 +36,10 @@ if not exist "%LIB%\*.jar" (
     echo [tracker] Build that bai. Kiem tra Java/Gradle trong backend.
     exit /b 1
   )
+)
+
+if exist "%ROOT%backend\build\libs\workchat-tracker-0.1.0.jar" (
+  copy /y "%ROOT%backend\build\libs\workchat-tracker-0.1.0.jar" "%LIB%\workchat-tracker-0.1.0.jar" >nul 2>&1
 )
 
 echo [tracker] HTTP :%TRACKER_PORT%  UDP heartbeat :%TRACKER_HEARTBEAT_PORT%  CORS=%CORS_ALLOW_ORIGIN%

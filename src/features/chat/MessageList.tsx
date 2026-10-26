@@ -10,6 +10,7 @@ import { FileBubble } from "./bubbles/FileBubble"
 import { MsgAck, readAck } from "./bubbles/MsgAck"
 import { callEventFromMessage, type CallMedia } from "../../lib/callEvent"
 import type { CallKind } from "../../lib/peer"
+import type { OngoingGroupCall } from "../../lib/groupCallPresence"
 import { getUserProfile } from "../../lib/personDirectory"
 import { ENCRYPTED_PREVIEW, messageContentDisplay } from "../../lib/conversationPreview"
 
@@ -139,6 +140,9 @@ export interface MessageListProps {
   call: any
   callDur: number
   startCall: (kind: CallKind, conv?: Conversation) => Promise<void> | void
+  /** Cuộc gọi NHÓM đang diễn ra ở phòng này mà máy này không ở trong → hiện nút "Tham gia". */
+  ongoingGroupCall?: OngoingGroupCall | null
+  onJoinOngoing?: () => void
   showJump: boolean
   jumpToBottom: () => void
   historyLoading?: boolean
@@ -181,6 +185,8 @@ export function MessageList({
   call,
   callDur,
   startCall,
+  ongoingGroupCall = null,
+  onJoinOngoing,
   showJump,
   jumpToBottom,
   historyLoading = false,
@@ -189,6 +195,24 @@ export function MessageList({
   onRetryFile,
   e2eUnlocked = true,
 }: MessageListProps) {
+  // Đồng hồ cho thẻ cuộc gọi nhóm "bên ngoài" — chỉ chạy khi có cuộc gọi đang diễn ra.
+  const [ambientNow, setAmbientNow] = React.useState(() => Date.now())
+  const ambientCallId = ongoingGroupCall?.callId
+  React.useEffect(() => {
+    if (!ambientCallId) return
+    setAmbientNow(Date.now())
+    const id = window.setInterval(() => setAmbientNow(Date.now()), 1000)
+    return () => window.clearInterval(id)
+  }, [ambientCallId])
+
+  // Máy này đang bận cuộc gọi ở CHÍNH hội thoại này (kể cả lúc đang kết nối lại):
+  // không hiện thêm thẻ "Tham gia" song song.
+  const localCallActiveHere =
+    !!call &&
+    call.convId === selected.id &&
+    call.state !== "ended" &&
+    call.state !== "failed"
+
   return (
     <div
       ref={scrollRef}
@@ -1109,7 +1133,8 @@ export function MessageList({
       })}
 
       {/* Thẻ "Cuộc gọi đang diễn ra" (chạy thời gian thực) — hiển thị từ trạng
-          thái cuộc gọi trực tiếp, KHÔNG tạo sự kiện lưu (tránh trùng). */}
+          thái cuộc gọi trực tiếp, KHÔNG tạo sự kiện lưu (tránh trùng).
+          Máy đã ở trong cuộc gọi thì KHÔNG hiện nút "Tham gia" nữa. */}
       {call &&
         call.state === "in-call" &&
         call.convId === selected.id && (
@@ -1141,8 +1166,38 @@ export function MessageList({
               (selected.members ?? []).find((m) => m.id !== meId)?.id
             }
             liveSec={callDur}
-            canJoin={!!selected.isGroup}
-            onJoin={() => void startCall(call.kind, selected)}
+            canJoin={false}
+          />
+        )}
+
+      {/* Cuộc gọi NHÓM vẫn đang diễn ra nhưng máy này KHÔNG ở trong (chưa vào hoặc vừa
+          rời) — hiện thẻ "Tham gia" để vào lại ĐÚNG cuộc gọi đó (không tạo cuộc gọi mới). */}
+      {ongoingGroupCall &&
+        selected.isGroup &&
+        !localCallActiveHere && (
+          <CallEventCard
+            event={{
+              media: ongoingGroupCall.kind,
+              outcome: "ongoing",
+              durationSec: 0,
+              startedAt: ongoingGroupCall.startedAt,
+              starterId: ongoingGroupCall.callerId,
+              participants:
+                selected.members?.length ??
+                ongoingGroupCall.participantIds.length,
+              groupIds: (selected.members ?? [])
+                .filter((m) => m.id !== meId)
+                .map((m) => m.id),
+              callId: ongoingGroupCall.callId,
+            }}
+            mine={ongoingGroupCall.callerId === meId}
+            peerName={selected.name}
+            liveSec={Math.max(
+              0,
+              Math.floor((ambientNow - ongoingGroupCall.startedAt) / 1000),
+            )}
+            canJoin
+            onJoin={onJoinOngoing}
           />
         )}
       <div ref={chatEndRef} />

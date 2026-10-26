@@ -55,6 +55,23 @@ export function shouldInitiateOffer(myId: number, otherId: number): boolean {
   return myId < otherId
 }
 
+/**
+ * Quy tắc tự kết thúc khi cuộc gọi chỉ còn một người.
+ *
+ * Điều kiện cũ (`roster === 0 && pending === 0`) làm bên GỌI NHÓM bị treo mãi vì những
+ * người chưa nghe máy vẫn nằm trong `pending`. Quy tắc mới: nếu đã TỪNG có người khác
+ * tham gia thì khi roster rỗng là kết thúc ngay (cuộc gọi cần ≥ 2 người); nếu chưa ai
+ * vào thì vẫn chờ nốt những người đang đổ chuông.
+ */
+export function shouldFinishCallWithoutRemote(
+  rosterSize: number,
+  pendingSize: number,
+  everHadRemote: boolean,
+): boolean {
+  if (rosterSize > 0) return false
+  return everHadRemote || pendingSize === 0
+}
+
 /** Chuẩn hoá ICE candidate nhận từ frame thành dạng `addIceCandidate` chấp nhận. */
 export function normalizeCandidate(
   c: { candidate?: string; sdpMid?: string; sdpMLineIndex?: number } | undefined,
@@ -123,6 +140,8 @@ export class CallSession {
   private readonly names = new Map<number, string>()
   private readonly roster = new Set<number>()
   private readonly pendingPeers = new Set<number>()
+  /** Đã từng có ÍT NHẤT một người khác thật sự vào cuộc gọi chưa. */
+  private everHadRemote = false
   private readonly pending = new Map<number, RTCIceCandidateInit[]>()
   private joined = false
   private finished = false
@@ -298,15 +317,15 @@ export class CallSession {
       case "end":
         this.pendingPeers.delete(from)
         this.removeParticipant(from)
-        if (this.roster.size === 0 && this.pendingPeers.size === 0) {
-          this.finish("Cuộc gọi đã kết thúc")
+        if (this.shouldFinishWithoutRemote()) {
+          this.finishWithoutRemote("Cuộc gọi đã kết thúc vì không còn ai khác tham gia")
         }
         return
       case "reject":
         this.pendingPeers.delete(from)
         this.removeParticipant(from)
-        if (this.roster.size === 0 && this.pendingPeers.size === 0) {
-          this.finish(
+        if (this.shouldFinishWithoutRemote()) {
+          this.finishWithoutRemote(
             frame.reason === "busy"
               ? "busy"
               : this.isCaller
@@ -555,11 +574,11 @@ export class CallSession {
             this.reconnectTimers.delete(userId)
             if (pc.connectionState !== "connected" && pc.iceConnectionState !== "connected") {
               this.removeParticipant(userId)
-              if (this.roster.size === 0) {
-                this.finish("Cuộc gọi kết thúc do mất kết nối mạng")
+              if (this.shouldFinishWithoutRemote()) {
+                this.finishWithoutRemote("Cuộc gọi kết thúc do mất kết nối mạng")
               }
             }
-          }, 20000)
+          }, 8000)
           this.reconnectTimers.set(userId, timer)
         }
         if (typeof (pc as any).restartIce === "function") {
@@ -573,8 +592,8 @@ export class CallSession {
           const timer = setTimeout(() => {
             this.reconnectTimers.delete(userId)
             this.removeParticipant(userId)
-            if (this.roster.size === 0) {
-              this.finish("Cuộc gọi kết thúc do mất kết nối mạng")
+            if (this.shouldFinishWithoutRemote()) {
+              this.finishWithoutRemote("Cuộc gọi kết thúc do mất kết nối mạng")
             }
           }, 5000)
           this.reconnectTimers.set(userId, timer)
@@ -678,8 +697,43 @@ export class CallSession {
     if (name) this.names.set(userId, name)
     if (!this.roster.has(userId)) {
       this.roster.add(userId)
+      this.everHadRemote = true
       this.emitParticipants()
     }
+  }
+
+  /**
+   * Chỉ còn bản thân trong cuộc gọi?
+   *
+   * Điều kiện cũ (`roster.size === 0 && pendingPeers.size === 0`) làm bên GỌI NHÓM bị treo
+   * mãi: những người chưa nghe máy vẫn nằm trong `pendingPeers`, nên khi người duy nhất đã
+   * vào cuộc gọi rời đi thì `pendingPeers` vẫn khác rỗng → không bao giờ kết thúc.
+   *
+   * Quy tắc mới: cuộc gọi cần ≥ 2 người. Nếu đã TỪNG có người khác tham gia
+   * (`everHadRemote`) thì khi roster rỗng, kết thúc ngay — kể cả khi vẫn còn người đang đổ
+   * chuông. Nếu chưa từng có ai (mới chỉ đổ chuông) thì vẫn chờ nốt những người còn lại
+   * trong `pendingPeers` như cũ.
+   */
+  private shouldFinishWithoutRemote(): boolean {
+    return shouldFinishCallWithoutRemote(
+      this.roster.size,
+      this.pendingPeers.size,
+      this.everHadRemote,
+    )
+  }
+
+  /** Kết thúc vì không còn ai khác: báo `end` cho người còn đang đổ chuông rồi đóng phiên. */
+  private finishWithoutRemote(reason: string) {
+    if (this.finished) return
+    if (this.joined) {
+      this.send({
+        signal: "end",
+        callId: this.callId,
+        roomId: this.roomId,
+        reason: "empty",
+      })
+    }
+    this.finish(reason)
   }
 
   private removeParticipant(userId: number) {

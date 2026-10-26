@@ -29,7 +29,14 @@ public final class OfflineDao {
     /** Một phong bì đọc ra từ hộp thư để trả cho client. */
     public record EnvelopeRow(long id, String clientMsgId, long roomId, long senderId, long recipientId,
                               String contentType, String algo, byte[] iv, byte[] wrappedKey,
-                              byte[] signature, byte[] ciphertext, long sentAtMs) {
+                              byte[] signature, byte[] ciphertext, long sentAtMs,
+                              boolean isEdited, Long editedAtMs) {
+        public EnvelopeRow(long id, String clientMsgId, long roomId, long senderId, long recipientId,
+                           String contentType, String algo, byte[] iv, byte[] wrappedKey,
+                           byte[] signature, byte[] ciphertext, long sentAtMs) {
+            this(id, clientMsgId, roomId, senderId, recipientId, contentType, algo, iv, wrappedKey,
+                    signature, ciphertext, sentAtMs, false, null);
+        }
     }
 
     /** Số phong bì chưa giao đang chờ cho một người nhận. */
@@ -99,11 +106,13 @@ public final class OfflineDao {
 
     /** Kéo các phong bì chưa giao có id &gt; afterId (tăng dần). */
     public List<EnvelopeRow> pull(long recipientId, long afterId, int limit) throws SQLException {
-        String sql = "SELECT id, client_msg_id, room_id, sender_id, recipient_id, content_type, algo, "
-                + "iv, wrapped_key, signature, ciphertext, (UNIX_TIMESTAMP(sent_at) * 1000) AS sent_ms "
-                + "FROM message_cache "
-                + "WHERE recipient_id = ? AND delivered_at IS NULL AND id > ? "
-                + "ORDER BY id ASC LIMIT ?";
+        String sql = "SELECT mc.id, mc.client_msg_id, mc.room_id, mc.sender_id, mc.recipient_id, mc.content_type, mc.algo, "
+                + "mc.iv, mc.wrapped_key, mc.signature, mc.ciphertext, (UNIX_TIMESTAMP(mc.sent_at) * 1000) AS sent_ms, "
+                + "mm.is_edited, (UNIX_TIMESTAMP(mm.edited_at) * 1000) AS edited_ms "
+                + "FROM message_cache mc "
+                + "LEFT JOIN message_meta mm ON mc.client_msg_id = mm.client_msg_id "
+                + "WHERE mc.recipient_id = ? AND mc.delivered_at IS NULL AND mc.id > ? "
+                + "ORDER BY mc.id ASC LIMIT ?";
         List<EnvelopeRow> out = new ArrayList<>();
         try (Connection c = ds.getConnection();
              PreparedStatement p = c.prepareStatement(sql)) {
@@ -112,6 +121,9 @@ public final class OfflineDao {
             p.setInt(3, limit);
             try (ResultSet rs = p.executeQuery()) {
                 while (rs.next()) {
+                    boolean isEdited = rs.getBoolean("is_edited");
+                    long edMs = rs.getLong("edited_ms");
+                    Long editedAtMs = rs.wasNull() ? null : edMs;
                     out.add(new EnvelopeRow(
                             rs.getLong("id"),
                             rs.getString("client_msg_id"),
@@ -124,7 +136,9 @@ public final class OfflineDao {
                             rs.getBytes("wrapped_key"),
                             rs.getBytes("signature"),
                             rs.getBytes("ciphertext"),
-                            rs.getLong("sent_ms")
+                            rs.getLong("sent_ms"),
+                            isEdited,
+                            editedAtMs
                     ));
                 }
             }
