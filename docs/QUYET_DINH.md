@@ -103,3 +103,16 @@
    - `403 forbidden_member_blocked`: Người dùng nằm trong danh sách bị chặn khỏi phòng.
    - `403 forbidden_member_send`: Thành viên thường không có quyền gửi tin nhắn trong nhóm này.
    - `403 forbidden_member_edit_info`: Thành viên thường không có quyền chỉnh sửa thông tin phòng.
+
+
+---
+
+## 3. Khắc Phục Lỗi Đổi Khóa E2E & Crash JS Trong Chat (Bổ sung)
+1. **Lỗi `ReferenceError: outgoingAcksRef is not defined`**:
+   - Khai báo `outgoingAcksRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())` trong `useChatMessages.ts` cùng `useEffect` cleanup dọn dẹp timer khi unmount.
+2. **Lỗi hiển thị sai thông báo lỗi Modal E2E**:
+   - Sửa `res.data?.error` thành `res.error || res.data?.error` trong `E2eChangePassModal.tsx` để hiển thị đúng thông báo lỗi thực tế trả về từ máy chủ thay vì rơi vào chuỗi mặc định gây hiểu nhầm.
+3. **Lỗi HTTP 500 khi lưu mã OTP đổi khóa E2E (`e2e_reset`)**:
+   - Tạo migration `docs/migrations/008_e2e_reset_otp_purpose.sql` để bổ sung `'e2e_reset'` vào `ENUM purpose` của bảng `otp_codes`.
+   - Cập nhật file `schema.sql` đồng bộ.
+   - Bọc try-catch `SQLException` tại `HttpRestHandler.java` để bắt lỗi DB và trả về thông báo lỗi rõ ràng nếu DB chưa chạy migration.

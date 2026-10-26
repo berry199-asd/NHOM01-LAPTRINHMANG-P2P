@@ -85,7 +85,7 @@ CREATE TABLE otp_codes (
   id            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   user_id       BIGINT UNSIGNED NULL,
   target        VARCHAR(255) NOT NULL,
-  purpose       ENUM('register','forgot_password','change_email_old','change_email_new') NOT NULL,
+  purpose       ENUM('register','forgot_password','change_email_old','change_email_new','e2e_reset') NOT NULL,
   code_hash     VARCHAR(255) NOT NULL,
   expires_at    DATETIME NOT NULL,
   consumed_at   DATETIME NULL,

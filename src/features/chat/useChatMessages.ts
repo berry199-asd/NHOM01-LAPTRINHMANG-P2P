@@ -249,6 +249,14 @@ export function useChatMessages({
   const prependHeightRef = useRef<number | null>(null)
   const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const dragCounterRef = useRef(0)
+  const outgoingAcksRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
+
+  useEffect(() => {
+    return () => {
+      outgoingAcksRef.current.forEach((t) => clearTimeout(t))
+      outgoingAcksRef.current.clear()
+    }
+  }, [])
 
   const pushRecentEmoji = (emoji: string) => {
     setRecentEmojis((prev) => {

@@ -58,7 +58,7 @@ export function E2eChangePassModal({
       if (res.ok && res.data?.ok) {
         setStep("otp")
       } else {
-        setErrorMsg(res.data?.error || "Email không khớp với tài khoản đã đăng ký")
+        setErrorMsg(res.error || res.data?.error || "Không thể gửi yêu cầu xác thực OTP")
       }
     } catch {
       setErrorMsg("Không thể gửi yêu cầu xác thực OTP")
@@ -79,7 +79,7 @@ export function E2eChangePassModal({
         setTicket(res.data.ticket)
         setStep("new_pass")
       } else {
-        setErrorMsg(res.data?.error || "Mã OTP không hợp lệ hoặc đã hết hạn")
+        setErrorMsg(res.error || res.data?.error || "Mã OTP không hợp lệ hoặc đã hết hạn")
         setOtpDigits(Array(6).fill(""))
         otpRefs.current[0]?.focus()
       }
